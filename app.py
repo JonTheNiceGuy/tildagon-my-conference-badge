@@ -74,6 +74,27 @@ def _verb_key(field_key):
     return field_key + "_verb"
 
 
+IMAGE_FILENAME = "badge_image.jpg"
+
+
+def _get_app_path():
+    """Get the app's directory path on the device."""
+    if sys.implementation.name != "micropython":
+        return "."
+    try:
+        apps = os.listdir("/apps")
+        for a in apps:
+            try:
+                files = os.listdir("/apps/" + a)
+                if "app.py" in files and "qr.py" in files:
+                    return "/apps/" + a
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return "."
+
+
 def _generate_token():
     """Generate a 4-character hex session token."""
     try:
@@ -191,6 +212,10 @@ class ConferenceBadge(app.App):
         self.server_url = ""
         self.qr_matrix = None
 
+        # Image state
+        self.app_path = _get_app_path()
+        self.image_path = self.app_path + "/" + IMAGE_FILENAME
+
         # Load settings
         self._load_settings()
 
@@ -205,6 +230,13 @@ class ConferenceBadge(app.App):
         self.ice_name = settings.get(KEY_ICE_NAME)
         self.ice_notes = settings.get(KEY_ICE_NOTES)
 
+        # Cache image existence check
+        try:
+            os.stat(self.image_path)
+            self._image_exists = True
+        except (OSError, AttributeError):
+            self._image_exists = False
+
     def _has_settings(self):
         """Check if any meaningful settings are configured."""
         # Check if name is set
@@ -218,6 +250,16 @@ class ConferenceBadge(app.App):
 
     def _has_ice_configured(self):
         return self.ice_phone or self.ice_name
+
+    def _has_image(self):
+        return self._image_exists
+
+    def _total_pages(self):
+        """Total number of pages including image if present."""
+        count = len(self.display_fields) if self.display_fields else 0
+        if self._has_image():
+            count += 1
+        return max(count, 1)
 
     def _get_field_value(self, field_key):
         return settings.get(field_key)
@@ -323,19 +365,34 @@ class ConferenceBadge(app.App):
     def _handle_request(self, client):
         """Handle an incoming HTTP request."""
         try:
-            request = client.recv(4096).decode('utf-8')
-            if not request:
+            # Read initial chunk to get headers
+            initial = client.recv(4096)
+            if not initial:
                 client.close()
                 return
 
-            lines = request.split('\r\n')
+            header_end = initial.find(b'\r\n\r\n')
+            if header_end == -1:
+                client.close()
+                return
+
+            header_bytes = initial[:header_end]
+            header_str = header_bytes.decode('utf-8')
+            lines = header_str.split('\r\n')
             first_line = lines[0] if lines else ""
             parts = first_line.split(' ')
             method = parts[0] if parts else "GET"
             path = parts[1] if len(parts) > 1 else "/"
 
+            # Parse Content-Length
+            content_length = 0
+            for line in lines[1:]:
+                if line.lower().startswith('content-length:'):
+                    content_length = int(line.split(':', 1)[1].strip())
+
             # Check session token
-            if path != "/" + self.session_token and not path.startswith("/" + self.session_token + "?"):
+            token_path = "/" + self.session_token
+            if not path.startswith(token_path):
                 error_body = '''<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
@@ -347,16 +404,29 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 client.close()
                 return
 
-            # Get body for POST
-            body = ""
-            if method == "POST":
-                body_start = request.find('\r\n\r\n')
-                if body_start != -1:
-                    body = request[body_start + 4:]
+            sub_path = path[len(token_path):]
 
-            # Process request
+            # Read body
+            body_bytes = initial[header_end + 4:]
+            while len(body_bytes) < content_length:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                body_bytes += chunk
+
+            # Route: image upload
+            if method == "POST" and sub_path == "/image":
+                self._handle_image_upload(client, body_bytes)
+                return
+
+            # Route: image delete
+            if method == "POST" and sub_path == "/image/delete":
+                self._handle_image_delete(client)
+                return
+
+            # Route: normal form or GET
             if method == "POST":
-                response_body = self._handle_post(body)
+                response_body = self._handle_post(body_bytes.decode('utf-8'))
             else:
                 response_body = self._get_settings_page()
 
@@ -374,6 +444,30 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 pass
         finally:
             client.close()
+
+    def _handle_image_upload(self, client, body_bytes):
+        """Handle image upload - body is raw JPEG bytes."""
+        try:
+            if len(body_bytes) > 35000:
+                msg = "Image too large (max 30KB)"
+            elif len(body_bytes) < 100:
+                msg = "No image data received"
+            else:
+                with open(self.image_path, 'wb') as f:
+                    f.write(body_bytes)
+                msg = "OK"
+        except Exception as e:
+            msg = "Error: " + str(e)
+        client.send(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" + msg).encode('utf-8'))
+
+    def _handle_image_delete(self, client):
+        """Handle image delete request."""
+        try:
+            os.remove(self.image_path)
+            msg = "OK"
+        except OSError:
+            msg = "No image to delete"
+        client.send(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" + msg).encode('utf-8'))
 
     def _handle_post(self, body):
         """Handle POST form submission."""
@@ -594,6 +688,16 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
     </form>
 
     <div class="section">
+        <h2>Badge Image</h2>
+        <p style="font-size:14px;color:#666;">Upload a 240x240 image to show in the badge rotation (max 30KB JPEG).</p>
+        <input type="file" id="imgFile" accept="image/*" style="margin:8px 0;">
+        <canvas id="imgPreview" width="240" height="240" style="display:none;border:1px solid #ccc;border-radius:4px;margin:8px 0;max-width:100%;"></canvas>
+        <div id="imgStatus" style="margin:8px 0;font-size:14px;"></div>
+        <button type="button" id="imgUpload" style="display:none;" class="add-btn">Upload Image</button>
+        <button type="button" id="imgDelete" onclick="deleteImage()" style="background:#d9534f;color:white;border:none;">Delete Image</button>
+    </div>
+
+    <div class="section">
         <h2>Reorder</h2>
         <form method="POST" action="''' + action_url + '''">
             ''' + reorder_html + '''
@@ -627,6 +731,63 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         document.getElementById(activeInput).value=c;
         document.getElementById("box_"+activeInput).style.background=c;
         closeModal();
+    }
+
+    // Image upload
+    var imgCanvas=document.getElementById("imgPreview");
+    var imgCtx=imgCanvas.getContext("2d");
+    var imgBlob=null;
+    var imgUrl="''' + action_url + '''/image";
+
+    document.getElementById("imgFile").addEventListener("change",function(e){
+        var file=e.target.files[0];
+        if(!file)return;
+        var img=new Image();
+        img.onload=function(){
+            imgCanvas.style.display="block";
+            // Center-crop to square
+            var s=Math.min(img.width,img.height);
+            var sx=(img.width-s)/2,sy=(img.height-s)/2;
+            imgCtx.drawImage(img,sx,sy,s,s,0,0,240,240);
+            // Try decreasing quality to fit under 30KB
+            var tryQuality=function(q){
+                imgCanvas.toBlob(function(blob){
+                    if(blob.size>30000&&q>0.2){
+                        tryQuality(q-0.1);
+                    }else{
+                        imgBlob=blob;
+                        var kb=(blob.size/1024).toFixed(1);
+                        var status=document.getElementById("imgStatus");
+                        if(blob.size>30000){
+                            status.innerHTML="<b style=color:red>"+kb+"KB - too large even at min quality.</b>";
+                            document.getElementById("imgUpload").style.display="none";
+                        }else{
+                            status.innerHTML=kb+"KB (quality "+Math.round(q*100)+"%) - ready to upload";
+                            document.getElementById("imgUpload").style.display="inline-block";
+                        }
+                    }
+                },"image/jpeg",q);
+            };
+            tryQuality(0.8);
+        };
+        img.src=URL.createObjectURL(file);
+    });
+
+    document.getElementById("imgUpload").addEventListener("click",function(){
+        if(!imgBlob)return;
+        var status=document.getElementById("imgStatus");
+        status.innerHTML="Uploading...";
+        fetch(imgUrl,{method:"POST",body:imgBlob}).then(function(r){return r.text();}).then(function(t){
+            if(t==="OK"){status.innerHTML="<b style=color:green>Uploaded!</b>";document.getElementById("imgUpload").style.display="none";}
+            else{status.innerHTML="<b style=color:red>"+t+"</b>";}
+        }).catch(function(e){status.innerHTML="<b style=color:red>Upload failed</b>";});
+    });
+
+    function deleteImage(){
+        if(!confirm("Delete badge image?"))return;
+        fetch(imgUrl+"/delete",{method:"POST"}).then(function(r){return r.text();}).then(function(t){
+            document.getElementById("imgStatus").innerHTML=(t==="OK")?"<b>Image deleted</b>":"<b>"+t+"</b>";
+        }).catch(function(){document.getElementById("imgStatus").innerHTML="<b style=color:red>Delete failed</b>";});
     }
     </script>
 </body>
@@ -810,12 +971,14 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             self.mode = self.MODE_BADGE
 
     def _next_page(self):
-        if self.display_fields:
-            self.current_page = (self.current_page + 1) % len(self.display_fields)
+        total = self._total_pages()
+        if total > 0:
+            self.current_page = (self.current_page + 1) % total
 
     def _prev_page(self):
-        if self.display_fields:
-            self.current_page = (self.current_page - 1) % len(self.display_fields)
+        total = self._total_pages()
+        if total > 0:
+            self.current_page = (self.current_page - 1) % total
 
     # --- Drawing ---
 
@@ -921,9 +1084,19 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
 
     def _draw_badge_page(self, ctx):
         """Draw a normal badge page."""
-        if not self.display_fields:
+        num_fields = len(self.display_fields) if self.display_fields else 0
+        total = self._total_pages()
+
+        if num_fields == 0 and not self._has_image():
             ctx.rgb(*self.bg_color).rectangle(-120, -120, 240, 240).fill()
             self._draw_no_fields(ctx)
+            return
+
+        # Image page (last in rotation)
+        if self.current_page >= num_fields:
+            self._draw_image_page(ctx)
+            if total > 1:
+                self._draw_page_indicator(ctx, self.fg_color)
             return
 
         field_key = self.display_fields[self.current_page]
@@ -958,8 +1131,18 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             ctx.rgb(*vfg).move_to(0, 40).text("Not set")
             ctx.move_to(0, 65).text("Press D for settings")
 
-        if len(self.display_fields) > 1:
+        if total > 1:
             self._draw_page_indicator(ctx, vfg)
+
+    def _draw_image_page(self, ctx):
+        """Draw the uploaded image page."""
+        ctx.rgb(*self.bg_color).rectangle(-120, -120, 240, 240).fill()
+        try:
+            ctx.image(self.image_path, -120, -120, 240, 240)
+        except Exception:
+            ctx.rgb(*self.fg_color)
+            ctx.font_size = 20
+            ctx.move_to(0, 0).text("Image error")
 
     def _draw_no_fields(self, ctx):
         ctx.rgb(*self.bg_color).rectangle(-120, -120, 240, 240).fill()
@@ -969,7 +1152,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         ctx.move_to(0, 20).text("Press D for settings")
 
     def _draw_page_indicator(self, ctx, active_color):
-        num_pages = len(self.display_fields)
+        num_pages = self._total_pages()
         dot_radius = 4
         dot_spacing = 15
         total_width = (num_pages - 1) * dot_spacing
