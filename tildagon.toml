@@ -1,0 +1,14 @@
+[app]
+name = "My Conf. Badge"
+category = "Badge"
+wifi_preference = true
+
+[entry]
+class = "Badge"
+
+[metadata]
+author = "Jon.Spriggs"
+license = "Unlicense"
+url = "https://github.com/JonTheNiceGuy/tildagon-my-conference-badge"
+description = "Multi-page conference badge with ICE (in case of emergency) support"
+version = "1.0.0"
