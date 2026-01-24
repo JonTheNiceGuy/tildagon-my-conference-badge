@@ -12,6 +12,33 @@ You'll also notice "ICE" (or In Case of Emergency). You can set a "Someone" who 
 
 To get to this, press "B" (top right) and confirm with "E" (bottom left) within 5 seconds. This will show your ICE contact details. Press "B" (top right) again to see your medical details.
 
+## Customising the Conference Logo
+
+This app includes a built-in conference logo (`event_logo.jpg`) that appears in the badge rotation by default. To replace it with your own conference or event logo:
+
+1. Prepare your image as a **240x240 pixel JPEG**, under **30KB** in size.
+2. You can use a command like this to convert your source image:
+   ```bash
+   python3 -c "
+   from PIL import Image
+   img = Image.open('your_logo.png')
+   if img.mode in ('RGBA', 'LA', 'P'):
+       bg = Image.new('RGB', img.size, (0, 0, 0))
+       img_rgba = img.convert('RGBA')
+       bg.paste(img_rgba, mask=img_rgba.split()[3])
+       img = bg
+   size = min(img.size)
+   left, top = (img.width - size) // 2, (img.height - size) // 2
+   img = img.crop((left, top, left + size, top + size))
+   img = img.resize((240, 240), Image.Resampling.LANCZOS)
+   img.save('event_logo.jpg', 'JPEG', quality=85)
+   "
+   ```
+3. Replace `event_logo.jpg` in the app directory with your new file (keep the same filename).
+4. Optionally, update the display name in `web.py` where it says `"Event Logo"` to match your event.
+
+The logo can be hidden or reordered via the web settings interface.
+
 ## Pull Requests, Feature Requests and Forks
 
 Please don't hesitate to raise a Pull and Feature Requests against this repo. I mainly forked this from the original Jake Walker version because of how many changes I made to their repo, and I didn't feel it would be fair to ask them to support this giant amount of changes. I am happy for you to contribute to this, or fork it for yourself. It is released under the "[Unlicense](LICENSE)" and thus you are free to do as you will with it, caveat the following two statements.

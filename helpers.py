@@ -18,9 +18,9 @@ KEY_ICE_NOTES = PREFIX + "ice_notes"
 IMAGE_FILENAME = "badge_image.jpg"
 IMAGE_FIELD = "__image__"
 
-# EMF logo (built-in image)
-EMF_LOGO_FILENAME = "emf_logo.jpg"
-EMF_LOGO_FIELD = "__emf_logo__"
+# Event logo (built-in image)
+EVENT_LOGO_FILENAME = "event_logo.jpg"
+EVENT_LOGO_FIELD = "__event_logo__"
 
 # Colour definitions (16 HTML named colours)
 COLOURS = {

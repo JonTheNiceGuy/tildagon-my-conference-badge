@@ -12,7 +12,7 @@ from events.input import BUTTON_TYPES, Buttons
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_HAS_STARTED,
     KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
-    IMAGE_FILENAME, IMAGE_FIELD, EMF_LOGO_FILENAME, EMF_LOGO_FIELD,
+    IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FILENAME, EVENT_LOGO_FIELD,
     colour_rgb, display_name, verb_key, get_app_path
 )
 from .web import WebServerMixin
@@ -76,7 +76,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         # Image state
         self.app_path = get_app_path()
         self.image_path = self.app_path + "/" + IMAGE_FILENAME
-        self.emf_logo_path = self.app_path + "/" + EMF_LOGO_FILENAME
+        self.event_logo_path = self.app_path + "/" + EVENT_LOGO_FILENAME
 
         # Load settings
         self._load_settings()
@@ -95,7 +95,7 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         self.display_fields = settings.get(KEY_DISPLAY_FIELDS)
         if self.display_fields is None:
-            self.display_fields = [EMF_LOGO_FIELD, KEY_NAME]
+            self.display_fields = [EVENT_LOGO_FIELD, KEY_NAME]
             settings.set(KEY_DISPLAY_FIELDS, self.display_fields)
 
         self.ice_phone = settings.get(KEY_ICE_PHONE)
@@ -112,7 +112,7 @@ class ConferenceBadge(app.App, WebServerMixin):
     def _has_settings(self):
         """Check if any meaningful settings are configured."""
         for field in self.display_fields:
-            if field == IMAGE_FIELD or field == EMF_LOGO_FIELD:
+            if field == IMAGE_FIELD or field == EVENT_LOGO_FIELD:
                 continue
             val = settings.get(field)
             if val:
@@ -453,8 +453,8 @@ class ConferenceBadge(app.App, WebServerMixin):
                 self._draw_page_indicator(ctx, self.fg_color)
             return
 
-        if field_key == EMF_LOGO_FIELD:
-            self._draw_image_page(ctx, self.emf_logo_path)
+        if field_key == EVENT_LOGO_FIELD:
+            self._draw_image_page(ctx, self.event_logo_path)
             if total > 1:
                 self._draw_page_indicator(ctx, self.fg_color)
             return

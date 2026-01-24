@@ -7,7 +7,7 @@ import settings
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
-    IMAGE_FIELD, EMF_LOGO_FIELD, COLOUR_NAMES,
+    IMAGE_FIELD, EVENT_LOGO_FIELD, COLOUR_NAMES,
     display_name, verb_key, field_key, generate_token, format_exception,
     parse_form, html_esc
 )
@@ -219,9 +219,9 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 if field_to_delete in display_fields and field_to_delete != KEY_NAME:
                     display_fields.remove(field_to_delete)
                     settings.set(KEY_DISPLAY_FIELDS, display_fields)
-                    # EMF logo is just hidden, not deleted - no settings to clear
-                    if field_to_delete == EMF_LOGO_FIELD:
-                        message = "Hidden: EMFCamp logo"
+                    # Event logo is just hidden, not deleted - no settings to clear
+                    if field_to_delete == EVENT_LOGO_FIELD:
+                        message = "Hidden: Event Logo"
                     else:
                         # Clear settings for regular fields
                         settings.set(field_to_delete, "")
@@ -239,12 +239,12 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                     settings.set(KEY_DISPLAY_FIELDS, display_fields)
                     message = "Added field: " + raw_name
 
-            # Handle show EMF logo
-            elif data.get("action") == "show_emf_logo":
-                if EMF_LOGO_FIELD not in display_fields:
-                    display_fields.insert(0, EMF_LOGO_FIELD)
+            # Handle show Event logo
+            elif data.get("action") == "show_event_logo":
+                if EVENT_LOGO_FIELD not in display_fields:
+                    display_fields.insert(0, EVENT_LOGO_FIELD)
                     settings.set(KEY_DISPLAY_FIELDS, display_fields)
-                    message = "EMFCamp logo shown"
+                    message = "Event Logo shown"
 
             # Handle move up
             elif "move_up" in data:
@@ -271,7 +271,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             # Handle save all
             elif data.get("action") == "save":
                 for field in display_fields:
-                    if field == IMAGE_FIELD or field == EMF_LOGO_FIELD:
+                    if field == IMAGE_FIELD or field == EVENT_LOGO_FIELD:
                         continue
                     l1_key = "line1_" + field
                     l2_key = "line2_" + field
@@ -327,7 +327,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
 
         field_rows = ""
         for field in display_fields:
-            if field == IMAGE_FIELD or field == EMF_LOGO_FIELD:
+            if field == IMAGE_FIELD or field == EVENT_LOGO_FIELD:
                 continue
             raw_value = settings.get(field)
             # Extract line1/line2 from list or string
@@ -390,18 +390,18 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 # Display name for special fields
                 if field == IMAGE_FIELD:
                     disp = "(image)"
-                elif field == EMF_LOGO_FIELD:
-                    disp = "EMFCamp"
+                elif field == EVENT_LOGO_FIELD:
+                    disp = "Event Logo"
                 else:
                     disp = html_esc(display_name(field))
                 esc_field = html_esc(field)
                 idx_str = str(i)
                 up_dis = "disabled" if i == 0 else ""
                 down_dis = "disabled" if i == len(display_fields) - 1 else ""
-                # Determine button: name can't be removed, EMF logo can be hidden, others removed
+                # Determine button: name can't be removed, Event logo can be hidden, others removed
                 if field == KEY_NAME or field == IMAGE_FIELD:
                     del_btn = ""
-                elif field == EMF_LOGO_FIELD:
+                elif field == EVENT_LOGO_FIELD:
                     del_btn = '<button type="submit" name="delete" value="' + esc_field + '" style="background:#f0ad4e;color:white;border:none;">Hide</button>'
                 else:
                     del_btn = '<button type="submit" name="delete" value="' + esc_field + '" style="background:#d9534f;color:white;border:none;">Remove</button>'
@@ -415,13 +415,13 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         else:
             reorder_html = "<p>No fields to reorder.</p>"
 
-        # Show EMF logo option if hidden
-        emf_hidden_html = ""
-        if EMF_LOGO_FIELD not in display_fields:
-            emf_hidden_html = '''
+        # Show Event logo option if hidden
+        event_hidden_html = ""
+        if EVENT_LOGO_FIELD not in display_fields:
+            event_hidden_html = '''
     <form method="POST" action="''' + "/" + self.session_token + '''">
         <div class="section">
-            <p>EMFCamp logo is hidden. <button type="submit" name="action" value="show_emf_logo" class="add-btn">Show EMFCamp Logo</button></p>
+            <p>Event Logo is hidden. <button type="submit" name="action" value="show_event_logo" class="add-btn">Show Event Logo</button></p>
         </div>
     </form>'''
 
@@ -484,7 +484,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         </div>
     </form>
 
-    ''' + emf_hidden_html + '''
+    ''' + event_hidden_html + '''
 
     <div class="section">
         <h2>Badge Image</h2>
