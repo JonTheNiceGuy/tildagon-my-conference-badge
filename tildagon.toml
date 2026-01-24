@@ -4,11 +4,11 @@ category = "Badge"
 wifi_preference = true
 
 [entry]
-class = "Badge"
+class = "ConferenceBadge"
 
 [metadata]
-author = "Jon.Spriggs"
+author = "JonTheNiceGuy"
 license = "Unlicense"
 url = "https://github.com/JonTheNiceGuy/tildagon-my-conference-badge"
 description = "Multi-page conference badge with ICE (in case of emergency) support"
-version = "1.0.0"
+version = "1.0.2"
