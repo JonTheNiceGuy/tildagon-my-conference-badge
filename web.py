@@ -7,8 +7,8 @@ import settings
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
-    IMAGE_FIELD, EVENT_LOGO_FIELD, COLOUR_NAMES, CTX_COLOUR_NAMES,
-    get_indicator_colours,
+    IMAGE_FIELD, EVENT_LOGO_FIELD, COLOUR_NAMES, COLOUR_GROUPS,
+    INDICATOR_DEFAULTS,
     display_name, verb_key, field_key, generate_token, format_exception,
     parse_form, html_esc
 )
@@ -338,10 +338,10 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                         if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
-                    # Save indicator colour settings (CTX 8-colour palette)
-                    for suffix in ["ind_inc", "ind_com"]:
+                    # Save indicator colour settings (foreground/background)
+                    for suffix in ["ind_fg", "ind_bg"]:
                         form_key = suffix + "_" + field
-                        if form_key in data and data[form_key] in CTX_COLOUR_NAMES:
+                        if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
                 # Save ICE settings
@@ -400,9 +400,9 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                         if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
-                    for suffix in ["ind_inc", "ind_com"]:
+                    for suffix in ["ind_fg", "ind_bg"]:
                         form_key = suffix + "_" + field
-                        if form_key in data and data[form_key] in CTX_COLOUR_NAMES:
+                        if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
                 settings.set(KEY_ICE_PHONE, data.get("ice_phone", ""))
@@ -448,10 +448,9 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             vbg = settings.get(field + "_vbg") or "black"
             vfg = settings.get(field + "_vfg") or "white"
 
-            # Indicator colours - get saved or defaults based on vbg
-            default_ind = get_indicator_colours(vbg)
-            ind_inc = settings.get(field + "_ind_inc") or default_ind[0]
-            ind_com = settings.get(field + "_ind_com") or default_ind[1]
+            # Indicator colours (foreground/background)
+            ind_fg = settings.get(field + "_ind_fg") or INDICATOR_DEFAULTS["foreground"]
+            ind_bg = settings.get(field + "_ind_bg") or INDICATOR_DEFAULTS["background"]
 
             field_rows += '''
             <tr>
@@ -476,15 +475,15 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                     <span class="cbox" id="box_vbg_''' + esc_field + '''" style="background:''' + vbg + '''" onclick="openPicker('vbg_''' + esc_field + '''')">B</span>
                     <span class="cbox" id="box_vfg_''' + esc_field + '''" style="background:''' + vfg + '''" onclick="openPicker('vfg_''' + esc_field + '''')">F</span>
                     <span class="clabel">Indicator:</span>
-                    <span class="cbox" id="box_ind_inc_''' + esc_field + '''" style="background:''' + ind_inc + '''" onclick="openCtxPicker('ind_inc_''' + esc_field + '''','vbg_''' + esc_field + '''')">-</span>
-                    <span class="cbox" id="box_ind_com_''' + esc_field + '''" style="background:''' + ind_com + '''" onclick="openCtxPicker('ind_com_''' + esc_field + '''','vbg_''' + esc_field + '''')">+</span>
+                    <span class="cbox" id="box_ind_bg_''' + esc_field + '''" style="background:''' + ind_bg + '''" onclick="openPicker('ind_bg_''' + esc_field + '''')">B</span>
+                    <span class="cbox" id="box_ind_fg_''' + esc_field + '''" style="background:''' + ind_fg + '''" onclick="openPicker('ind_fg_''' + esc_field + '''')">F</span>
                     <button type="button" class="reset-btn" onclick="resetColors('''' + esc_field + '''')">Reset</button>
                     <input type="hidden" name="hbg_''' + esc_field + '''" id="hbg_''' + esc_field + '''" value="''' + hbg + '''">
                     <input type="hidden" name="hfg_''' + esc_field + '''" id="hfg_''' + esc_field + '''" value="''' + hfg + '''">
                     <input type="hidden" name="vbg_''' + esc_field + '''" id="vbg_''' + esc_field + '''" value="''' + vbg + '''">
                     <input type="hidden" name="vfg_''' + esc_field + '''" id="vfg_''' + esc_field + '''" value="''' + vfg + '''">
-                    <input type="hidden" name="ind_inc_''' + esc_field + '''" id="ind_inc_''' + esc_field + '''" value="''' + ind_inc + '''">
-                    <input type="hidden" name="ind_com_''' + esc_field + '''" id="ind_com_''' + esc_field + '''" value="''' + ind_com + '''">
+                    <input type="hidden" name="ind_fg_''' + esc_field + '''" id="ind_fg_''' + esc_field + '''" value="''' + ind_fg + '''">
+                    <input type="hidden" name="ind_bg_''' + esc_field + '''" id="ind_bg_''' + esc_field + '''" value="''' + ind_bg + '''">
                 </td>
             </tr>'''
 
@@ -567,7 +566,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; }
         .modal-content { background: white; padding: 30px; border-radius: 12px; text-align: center; max-width: 320px; margin: 20px; }
         .modal-content h2 { color: #d9534f; margin-top: 0; }
-        #colorModal, #ctxColorModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; align-items: center; justify-content: center; }
+        #colorModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; align-items: center; justify-content: center; }
         .cpicker { background: white; padding: 20px; border-radius: 8px; text-align: center; max-width: 300px; }
         .cbtn { display: inline-block; width: 48px; height: 48px; margin: 4px; border: 2px solid #333; border-radius: 4px; cursor: pointer; }
     </style>
@@ -629,16 +628,12 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         <div class="cpicker" onclick="event.stopPropagation()">
             <p><b>Pick a colour</b></p>
             <div id="colorBtns"></div>
+            <div id="colorNav" style="margin-top:10px;">
+                <button type="button" onclick="colorPagePrev()">&lt; Prev</button>
+                <span id="colorPageInfo" style="margin:0 10px;"></span>
+                <button type="button" onclick="colorPageNext()">Next &gt;</button>
+            </div>
             <p style="margin-top:10px;"><button type="button" onclick="closeModal()">Cancel</button></p>
-        </div>
-    </div>
-
-    <div id="ctxColorModal" onclick="closeCtxModal()">
-        <div class="cpicker" onclick="event.stopPropagation()">
-            <p><b>Pick indicator colour</b></p>
-            <p style="font-size:12px;color:#666;">(8 display colours only)</p>
-            <div id="ctxColorBtns"></div>
-            <p style="margin-top:10px;"><button type="button" onclick="closeCtxModal()">Cancel</button></p>
         </div>
     </div>
 
@@ -654,60 +649,46 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
 
     <script>
     var activeInput=null;
-    var activeVbgInput=null;
-    var colors=["black","white","gray","silver","maroon","red","purple","fuchsia","green","lime","olive","yellow","navy","blue","teal","aqua"];
-    var ctxColors=["black","red","green","blue","yellow","magenta","cyan","white"];
-    var btns="";
-    for(var i=0;i<colors.length;i++){
-        btns+='<span class="cbtn" style="background:'+colors[i]+'" data-color="'+colors[i]+'"></span>';
+    var colors=["black","white","gray","silver","maroon","red","purple","fuchsia","green","lime","olive","yellow","navy","blue","teal","aqua",
+        "pink","lightpink","hotpink","deeppink","palevioletred","mediumvioletred",
+        "lavender","thistle","plum","orchid","violet","magenta","mediumorchid","darkorchid","darkviolet","blueviolet","darkmagenta","mediumpurple","mediumslateblue","slateblue","darkslateblue","rebeccapurple","indigo",
+        "lightsalmon","salmon","darksalmon","lightcoral","indianred","crimson","firebrick","darkred",
+        "orange","darkorange","coral","tomato","orangered",
+        "gold","lightyellow","lemonchiffon","lightgoldenrodyellow","papayawhip","moccasin","peachpuff","palegoldenrod","khaki","darkkhaki",
+        "greenyellow","chartreuse","lawngreen","lime","limegreen","palegreen","lightgreen","mediumspringgreen","springgreen","mediumseagreen","seagreen","forestgreen","darkgreen","yellowgreen","olivedrab","darkolivegreen","mediumaquamarine","darkseagreen","lightseagreen","darkcyan","teal",
+        "aqua","cyan","lightcyan","paleturquoise","aquamarine","turquoise","mediumturquoise","darkturquoise",
+        "cadetblue","steelblue","lightsteelblue","lightblue","powderblue","lightskyblue","skyblue","cornflowerblue","deepskyblue","dodgerblue","royalblue","mediumblue","darkblue","midnightblue",
+        "cornsilk","blanchedalmond","bisque","navajowhite","wheat","burlywood","tan","rosybrown","sandybrown","goldenrod","darkgoldenrod","peru","chocolate","saddlebrown","sienna","brown",
+        "snow","honeydew","mintcream","azure","aliceblue","ghostwhite","whitesmoke","seashell","beige","oldlace","floralwhite","ivory","antiquewhite","linen","lavenderblush","mistyrose",
+        "gainsboro","lightgray","darkgray","dimgray","lightslategray","slategray","darkslategray"];
+    var colorsPerRow=6;
+    var rowsPerPage=6;
+    var colorsPerPage=colorsPerRow*rowsPerPage;
+    var colorPage=0;
+    var totalColorPages=Math.ceil(colors.length/colorsPerPage);
+    function renderColorPage(){
+        var start=colorPage*colorsPerPage;
+        var end=Math.min(start+colorsPerPage,colors.length);
+        var btns="";
+        for(var i=start;i<end;i++){
+            btns+='<span class="cbtn" style="background:'+colors[i]+'" data-color="'+colors[i]+'"></span>';
+        }
+        document.getElementById("colorBtns").innerHTML=btns;
+        document.getElementById("colorPageInfo").textContent=(colorPage+1)+"/"+totalColorPages;
     }
-    document.getElementById("colorBtns").innerHTML=btns;
+    function colorPagePrev(){colorPage=(colorPage-1+totalColorPages)%totalColorPages;renderColorPage();}
+    function colorPageNext(){colorPage=(colorPage+1)%totalColorPages;renderColorPage();}
+    renderColorPage();
     document.getElementById("colorBtns").addEventListener("click",function(e){
         if(e.target.dataset.color){pickColor(e.target.dataset.color);}
     });
-    function openPicker(id){activeInput=id;document.getElementById("colorModal").style.display="flex";}
+    function openPicker(id){activeInput=id;colorPage=0;renderColorPage();document.getElementById("colorModal").style.display="flex";}
     function closeModal(){document.getElementById("colorModal").style.display="none";}
     function pickColor(c){
         document.getElementById(activeInput).value=c;
         document.getElementById("box_"+activeInput).style.background=c;
         closeModal();
-    }
-
-    // CTX 8-colour picker for indicators
-    function openCtxPicker(id,vbgId){
-        activeInput=id;
-        activeVbgInput=vbgId;
-        var vbg=document.getElementById(vbgId).value;
-        // Map 16-colour vbg to CTX equivalent
-        var vbgCtx=vbg;
-        if(vbg=="gray"||vbg=="silver")vbgCtx="white";
-        if(vbg=="maroon")vbgCtx="red";
-        if(vbg=="purple"||vbg=="fuchsia")vbgCtx="magenta";
-        if(vbg=="lime")vbgCtx="green";
-        if(vbg=="olive")vbgCtx="yellow";
-        if(vbg=="navy")vbgCtx="blue";
-        if(vbg=="teal"||vbg=="aqua")vbgCtx="cyan";
-        // Build buttons excluding vbg
-        var btns="";
-        for(var i=0;i<ctxColors.length;i++){
-            var c=ctxColors[i];
-            if(c==vbgCtx){
-                btns+='<span class="cbtn" style="background:'+c+';opacity:0.3;cursor:not-allowed;" title="Cannot match background"></span>';
-            }else{
-                btns+='<span class="cbtn" style="background:'+c+'" data-color="'+c+'"></span>';
-            }
-        }
-        document.getElementById("ctxColorBtns").innerHTML=btns;
-        document.getElementById("ctxColorModal").style.display="flex";
-    }
-    document.getElementById("ctxColorBtns").addEventListener("click",function(e){
-        if(e.target.dataset.color){pickCtxColor(e.target.dataset.color);}
-    });
-    function closeCtxModal(){document.getElementById("ctxColorModal").style.display="none";}
-    function pickCtxColor(c){
-        document.getElementById(activeInput).value=c;
-        document.getElementById("box_"+activeInput).style.background=c;
-        closeCtxModal();
+        saveForm();
     }
 
     // Image upload
@@ -773,8 +754,9 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         setColor('hfg_'+field,'white');
         setColor('vbg_'+field,'black');
         setColor('vfg_'+field,'white');
-        setColor('ind_inc_'+field,'blue');
-        setColor('ind_com_'+field,'white');
+        setColor('ind_fg_'+field,'lightgray');
+        setColor('ind_bg_'+field,'darkgray');
+        saveForm();
     }
     function setColor(id,c){
         document.getElementById(id).value=c;
@@ -791,11 +773,9 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
     }
 
     // AJAX form submission
-    document.querySelector('form[action="''' + action_url + '''"]').addEventListener('submit',function(e){
-        var btn=document.activeElement;
-        if(btn&&btn.name!=='action')return; // Let delete/move/add work normally
-        e.preventDefault();
-        var fd=new FormData(this);
+    var mainForm=document.querySelector('form[action="''' + action_url + '''"]');
+    function saveForm(){
+        var fd=new FormData(mainForm);
         fd.append('action','save');
         fetch("''' + action_url + '''/ajax",{method:'POST',body:new URLSearchParams(fd)})
         .then(function(r){return r.json();})
@@ -804,6 +784,12 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             else{showToast(d.message||'Error','error');}
         })
         .catch(function(){showToast('Save failed','error');});
+    }
+    mainForm.addEventListener('submit',function(e){
+        var btn=document.activeElement;
+        if(btn&&btn.name!=='action')return; // Let delete/move/add work normally
+        e.preventDefault();
+        saveForm();
     });
 
     // Poll server to detect shutdown

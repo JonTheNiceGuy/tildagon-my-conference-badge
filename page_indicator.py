@@ -4,16 +4,18 @@ import math
 
 
 def draw_page_indicator(ctx, num_pages, current_page, progress,
-                        ind_inc_color=None, ind_com_color=None):
+                        fg_color=None, bg_color=None):
     """Draw semi-circular progress indicator at bottom of display.
+
+    Draws background color first, then overlays foreground for progress.
 
     Args:
         ctx: Drawing context
         num_pages: Total number of pages
         current_page: Current page index (0-based)
         progress: Progress within current page (0.0 to 1.0)
-        ind_inc_color: RGB tuple for incomplete segments (default: blue)
-        ind_com_color: RGB tuple for complete segments (default: white)
+        fg_color: RGB tuple (floats) for foreground/complete (default: light grey)
+        bg_color: RGB tuple (floats) for background/incomplete (default: dark grey)
     """
     if num_pages < 1:
         return
@@ -23,9 +25,9 @@ def draw_page_indicator(ctx, num_pages, current_page, progress,
     line_width = 2
     gap_angle = math.pi / 45  # ~4 degrees gap between segments
 
-    # Default colors if not provided (blue/white works on black background)
-    color_incomplete = ind_inc_color if ind_inc_color else (0, 0, 255)
-    color_complete = ind_com_color if ind_com_color else (255, 255, 255)
+    # Default colors: light grey foreground, dark grey background
+    color_fg = fg_color if fg_color else (0.827, 0.827, 0.827)  # lightgray
+    color_bg = bg_color if bg_color else (0.663, 0.663, 0.663)  # darkgray
 
     # Arc spans from just under 9 o'clock to just under 3 o'clock (through bottom)
     # In screen coords (y-down): 180° = 9 o'clock, 90° = 6 o'clock (bottom), 0° = 3 o'clock
@@ -37,39 +39,43 @@ def draw_page_indicator(ctx, num_pages, current_page, progress,
     total_gaps = gap_angle * (num_pages - 1) if num_pages > 1 else 0
     segment_arc = (total_arc - total_gaps) / num_pages
 
-    # Draw smooth arcs using line segments
-    points_per_segment = 50  # More points for smoother lines
-
+    points_per_segment = 50
     ctx.line_width = line_width
 
+    # First pass: draw all segments in background color
     for i in range(num_pages):
-        # Page 0 starts at start_angle (170°), progressing clockwise through bottom to end_angle (10°)
+        seg_start = start_angle - i * (segment_arc + gap_angle)
+        _draw_arc_segment(ctx, seg_start, segment_arc, arc_radius, color_bg)
+
+    # Second pass: overlay foreground color for completed portions
+    for i in range(num_pages):
         seg_start = start_angle - i * (segment_arc + gap_angle)
 
-        # Determine how much of this segment to fill with each color
         if i < current_page:
-            fill_ratio = 1.0
+            # Fully complete - draw entire segment in foreground
+            _draw_arc_segment(ctx, seg_start, segment_arc, arc_radius, color_fg)
         elif i == current_page:
-            fill_ratio = progress
-        else:
-            fill_ratio = 0.0
+            # Partially complete - draw progress portion in foreground
+            if progress > 0:
+                fill_arc = segment_arc * progress
+                _draw_arc_segment(ctx, seg_start, fill_arc, arc_radius, color_fg)
 
-        # Draw the segment as smooth line (clockwise = decreasing angles)
-        prev_x, prev_y = None, None
-        for p in range(points_per_segment + 1):
-            t = p / points_per_segment
-            angle = seg_start - t * segment_arc
-            x = arc_radius * math.cos(angle)
-            y = arc_radius * math.sin(angle)
 
-            if prev_x is not None:
-                if t <= fill_ratio:
-                    ctx.rgb(*color_complete)
-                else:
-                    ctx.rgb(*color_incomplete)
+def _draw_arc_segment(ctx, start_angle, arc_length, radius, color):
+    """Draw a single arc segment."""
+    points = 50
+    ctx.rgb(*color)
 
-                ctx.move_to(prev_x, prev_y)
-                ctx.line_to(x, y)
-                ctx.stroke()
+    prev_x, prev_y = None, None
+    for p in range(points + 1):
+        t = p / points
+        angle = start_angle - t * arc_length
+        x = radius * math.cos(angle)
+        y = radius * math.sin(angle)
 
-            prev_x, prev_y = x, y
+        if prev_x is not None:
+            ctx.move_to(prev_x, prev_y)
+            ctx.line_to(x, y)
+            ctx.stroke()
+
+        prev_x, prev_y = x, y

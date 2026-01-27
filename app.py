@@ -13,8 +13,8 @@ from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_HAS_STARTED,
     KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
     IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FILENAME, EVENT_LOGO_FIELD,
-    colour_rgb, ctx_colour_rgb, display_name, verb_key, get_app_path,
-    get_indicator_colours
+    colour_rgb, display_name, verb_key, get_app_path,
+    get_indicator_defaults
 )
 from .web import WebServerMixin
 from .page_indicator import draw_page_indicator
@@ -31,13 +31,13 @@ class ConferenceBadge(app.App, WebServerMixin):
     FONT_SIZES = [56, 48, 40, 32, 24]
     MIN_FONT_SIZE = 24
 
-    # Default colours
-    bg_color = (0, 0, 0)
-    fg_color = (255, 255, 255)
-    header_bg_color = (255, 0, 0)
-    header_fg_color = (255, 255, 255)
-    ice_bg_color = (255, 0, 0)
-    ice_fg_color = (0, 0, 0)
+    # Default colours (floats 0.0-1.0 for ctx.rgb)
+    bg_color = (0.0, 0.0, 0.0)
+    fg_color = (1.0, 1.0, 1.0)
+    header_bg_color = (1.0, 0.0, 0.0)
+    header_fg_color = (1.0, 1.0, 1.0)
+    ice_bg_color = (1.0, 0.0, 0.0)
+    ice_fg_color = (0.0, 0.0, 0.0)
 
     # App modes
     MODE_SPLASH = 0
@@ -494,13 +494,12 @@ class ConferenceBadge(app.App, WebServerMixin):
         verb = self._get_field_verb(field_key)
         hbg, hfg, vbg, vfg = self._get_field_colours(field_key)
 
-        # Get indicator colours for this field
-        vbg_name = settings.get(field_key + "_vbg") or "black"
-        default_ind = get_indicator_colours(vbg_name)
-        ind_inc_name = settings.get(field_key + "_ind_inc") or default_ind[0]
-        ind_com_name = settings.get(field_key + "_ind_com") or default_ind[1]
-        ind_inc = ctx_colour_rgb(ind_inc_name, (0, 0, 255))
-        ind_com = ctx_colour_rgb(ind_com_name, (255, 255, 255))
+        # Get indicator colours (foreground/background) for this field
+        default_fg, default_bg = get_indicator_defaults()
+        ind_fg_name = settings.get(field_key + "_ind_fg")
+        ind_bg_name = settings.get(field_key + "_ind_bg")
+        ind_fg = colour_rgb(ind_fg_name, default_fg)
+        ind_bg = colour_rgb(ind_bg_name, default_bg)
 
         ctx.rgb(*vbg).rectangle(-120, -120, 240, 240).fill()
         ctx.rgb(*hbg).rectangle(-120, -120, 240, 100).fill()
@@ -549,7 +548,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             ctx.move_to(0, 65).text("Press D for settings")
 
         if total > 1:
-            self._draw_page_indicator(ctx, ind_inc, ind_com)
+            self._draw_page_indicator(ctx, ind_fg, ind_bg)
 
     def _draw_image_page(self, ctx, image_path):
         """Draw an image page."""
@@ -570,12 +569,12 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.rgb(*self.fg_color).move_to(0, -10).text("No fields configured")
         ctx.move_to(0, 20).text("Press D for settings")
 
-    def _draw_page_indicator(self, ctx, ind_inc_color=None, ind_com_color=None):
+    def _draw_page_indicator(self, ctx, fg_color=None, bg_color=None):
         """Draw semi-circular progress indicator at bottom of display."""
         progress = min(self.page_timer / self.AUTO_CYCLE_MS, 1.0)
         draw_page_indicator(
             ctx, self._total_pages(), self.current_page, progress,
-            ind_inc_color, ind_com_color
+            fg_color, bg_color
         )
 
     def _draw_ice_confirm(self, ctx):
