@@ -13,9 +13,11 @@ from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_HAS_STARTED,
     KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
     IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FILENAME, EVENT_LOGO_FIELD,
-    colour_rgb, display_name, verb_key, get_app_path
+    colour_rgb, ctx_colour_rgb, display_name, verb_key, get_app_path,
+    get_indicator_colours
 )
 from .web import WebServerMixin
+from .page_indicator import draw_page_indicator
 
 
 class ConferenceBadge(app.App, WebServerMixin):
@@ -42,8 +44,10 @@ class ConferenceBadge(app.App, WebServerMixin):
     MODE_BADGE = 1
     MODE_WEB_PROMPT = 2
     MODE_WEB_SERVER = 3
+    MODE_WIFI_ERROR = 4
 
     SPLASH_DURATION_MS = 10000
+    WIFI_ERROR_DURATION_MS = 2000
 
     def __init__(self):
         super().__init__()
@@ -64,6 +68,9 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         # Splash screen state
         self.splash_timer = 0
+
+        # WiFi error state
+        self.wifi_error_timer = 0
 
         # Web server state
         self.mode = self.MODE_SPLASH
@@ -203,6 +210,8 @@ class ConferenceBadge(app.App, WebServerMixin):
             self._update_web_prompt()
         elif self.mode == self.MODE_WEB_SERVER:
             self._update_web_server()
+        elif self.mode == self.MODE_WIFI_ERROR:
+            self._update_wifi_error(delta)
 
     def _update_badge(self, delta):
         """Update badge display mode."""
@@ -259,21 +268,22 @@ class ConferenceBadge(app.App, WebServerMixin):
                 self.config_confirm_mode = False
                 self.config_confirm_timer = 0
                 if not self._start_web_server():
-                    self.mode = self.MODE_WEB_PROMPT
+                    self.mode = self.MODE_WIFI_ERROR
+                    self.wifi_error_timer = 0
             elif self.ice_screen == 0:
                 self._prev_page()
                 self.page_timer = 0
             self.button_states.clear()
 
-        # Right (B) - ICE mode
+        # Right (B) - ICE mode / navigation
         if self.button_states.get(BUTTON_TYPES["RIGHT"]):
             if self.ice_screen == 0 and not self.ice_confirm_mode and not self.config_confirm_mode:
                 self.ice_confirm_mode = True
                 self.ice_confirm_timer = 0
             elif self.ice_screen == 1:
-                self.ice_screen = 2
+                self.ice_screen = 2  # Contact -> Notes
             elif self.ice_screen == 2:
-                self.ice_screen = 0
+                self.ice_screen = 1  # Notes -> Contact (back)
             self.button_states.clear()
 
         # Down (D) - Config mode
@@ -288,7 +298,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         if self.button_states.get(BUTTON_TYPES["RIGHT"]):
             self.button_states.clear()
             if not self._start_web_server():
-                pass
+                self.mode = self.MODE_WIFI_ERROR
+                self.wifi_error_timer = 0
 
         if self.button_states.get(BUTTON_TYPES["CANCEL"]):
             self.button_states.clear()
@@ -300,6 +311,13 @@ class ConferenceBadge(app.App, WebServerMixin):
             self.button_states.clear()
             self._stop_web_server()
 
+    def _update_wifi_error(self, delta):
+        """Update WiFi error display mode."""
+        self.wifi_error_timer += delta
+        if self.wifi_error_timer >= self.WIFI_ERROR_DURATION_MS:
+            self.wifi_error_timer = 0
+            self.mode = self.MODE_WEB_PROMPT
+
     def _update_splash(self, delta):
         """Update splash screen mode."""
         self.splash_timer += delta
@@ -308,8 +326,9 @@ class ConferenceBadge(app.App, WebServerMixin):
             self._end_splash()
             return
 
+        # Buttons A-E skip splash (UP=A, RIGHT=B, CONFIRM=C, DOWN=D, LEFT=E)
+        # F (CANCEL) does not skip
         if self.button_states.get(BUTTON_TYPES["CONFIRM"]) or \
-           self.button_states.get(BUTTON_TYPES["CANCEL"]) or \
            self.button_states.get(BUTTON_TYPES["UP"]) or \
            self.button_states.get(BUTTON_TYPES["DOWN"]) or \
            self.button_states.get(BUTTON_TYPES["LEFT"]) or \
@@ -321,9 +340,9 @@ class ConferenceBadge(app.App, WebServerMixin):
         """End splash screen and go to appropriate mode."""
         self.splash_timer = 0
         if not self._has_settings():
-            self.mode = self.MODE_WEB_PROMPT
-            if self._start_web_server():
-                pass
+            if not self._start_web_server():
+                self.mode = self.MODE_WIFI_ERROR
+                self.wifi_error_timer = 0
         else:
             self.mode = self.MODE_BADGE
 
@@ -350,6 +369,8 @@ class ConferenceBadge(app.App, WebServerMixin):
             self._draw_web_prompt(ctx)
         elif self.mode == self.MODE_WEB_SERVER:
             self._draw_web_server(ctx)
+        elif self.mode == self.MODE_WIFI_ERROR:
+            self._draw_wifi_error(ctx)
         elif self.ice_confirm_mode:
             self._draw_ice_confirm(ctx)
         elif self.config_confirm_mode:
@@ -381,8 +402,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         remaining = (self.SPLASH_DURATION_MS - self.splash_timer) / 1000
         ctx.font_size = 16
         ctx.rgb(150, 150, 150)
-        remaining_str = str(int(remaining))
-        ctx.move_to(0, 70).text("Starting soon...")
+        remaining_str = str(int(remaining) + 1)
+        ctx.move_to(0, 70).text("Any button to skip")
         ctx.move_to(0, 95).text("(" + remaining_str + "s)")
 
     def _draw_web_prompt(self, ctx):
@@ -427,6 +448,15 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 16
         ctx.move_to(0, qr_bottom + 20).text("F to stop server")
 
+    def _draw_wifi_error(self, ctx):
+        """Draw WiFi not connected error screen."""
+        ctx.rgb(100, 0, 0).rectangle(-120, -120, 240, 240).fill()
+        ctx.rgb(255, 255, 255)
+        ctx.font_size = 24
+        ctx.move_to(0, -20).text("WiFi not connected")
+        ctx.font_size = 18
+        ctx.move_to(0, 20).text("Check WiFi settings")
+
     def _get_field_colours(self, field_key):
         """Get per-field colours, falling back to defaults."""
         hbg = colour_rgb(settings.get(field_key + "_hbg"), self.header_bg_color)
@@ -446,23 +476,31 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         field_key = self.display_fields[self.current_page % len(self.display_fields)]
 
-        # Image pages
+        # Image pages (use default indicator colors for black background)
         if field_key == IMAGE_FIELD:
             self._draw_image_page(ctx, self.image_path)
             if total > 1:
-                self._draw_page_indicator(ctx, self.fg_color)
+                self._draw_page_indicator(ctx)  # Uses blue/white defaults
             return
 
         if field_key == EVENT_LOGO_FIELD:
             self._draw_image_page(ctx, self.event_logo_path)
             if total > 1:
-                self._draw_page_indicator(ctx, self.fg_color)
+                self._draw_page_indicator(ctx)  # Uses blue/white defaults
             return
 
         field_value = self._get_field_value(field_key)
         field_label = self._get_field_label(field_key)
         verb = self._get_field_verb(field_key)
         hbg, hfg, vbg, vfg = self._get_field_colours(field_key)
+
+        # Get indicator colours for this field
+        vbg_name = settings.get(field_key + "_vbg") or "black"
+        default_ind = get_indicator_colours(vbg_name)
+        ind_inc_name = settings.get(field_key + "_ind_inc") or default_ind[0]
+        ind_com_name = settings.get(field_key + "_ind_com") or default_ind[1]
+        ind_inc = ctx_colour_rgb(ind_inc_name, (0, 0, 255))
+        ind_com = ctx_colour_rgb(ind_com_name, (255, 255, 255))
 
         ctx.rgb(*vbg).rectangle(-120, -120, 240, 240).fill()
         ctx.rgb(*hbg).rectangle(-120, -120, 240, 100).fill()
@@ -511,7 +549,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             ctx.move_to(0, 65).text("Press D for settings")
 
         if total > 1:
-            self._draw_page_indicator(ctx, vfg)
+            self._draw_page_indicator(ctx, ind_inc, ind_com)
 
     def _draw_image_page(self, ctx, image_path):
         """Draw an image page."""
@@ -521,7 +559,9 @@ class ConferenceBadge(app.App, WebServerMixin):
         except Exception:
             ctx.rgb(*self.fg_color)
             ctx.font_size = 20
-            ctx.move_to(0, 0).text("Image error")
+            ctx.move_to(0, -10).text("Image error")
+            ctx.font_size = 16
+            ctx.move_to(0, 20).text("Press D to reconfigure")
 
     def _draw_no_fields(self, ctx):
         ctx.rgb(*self.bg_color).rectangle(-120, -120, 240, 240).fill()
@@ -530,20 +570,13 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.rgb(*self.fg_color).move_to(0, -10).text("No fields configured")
         ctx.move_to(0, 20).text("Press D for settings")
 
-    def _draw_page_indicator(self, ctx, active_color):
-        num_pages = self._total_pages()
-        dot_radius = 4
-        dot_spacing = 15
-        total_width = (num_pages - 1) * dot_spacing
-        start_x = -total_width / 2
-        y = 105
-        for i in range(num_pages):
-            x = start_x + (i * dot_spacing)
-            if i == self.current_page:
-                ctx.rgb(*active_color)
-            else:
-                ctx.rgb(100, 100, 100)
-            ctx.arc(x, y, dot_radius, 0, 2 * math.pi, True).fill()
+    def _draw_page_indicator(self, ctx, ind_inc_color=None, ind_com_color=None):
+        """Draw semi-circular progress indicator at bottom of display."""
+        progress = min(self.page_timer / self.AUTO_CYCLE_MS, 1.0)
+        draw_page_indicator(
+            ctx, self._total_pages(), self.current_page, progress,
+            ind_inc_color, ind_com_color
+        )
 
     def _draw_ice_confirm(self, ctx):
         ctx.rgb(*self.ice_bg_color).rectangle(-120, -120, 240, 240).fill()
@@ -556,10 +589,10 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 32
         ctx.rgb(*self.ice_fg_color).move_to(0, -40).text("Display ICE?")
         ctx.font_size = 24
-        ctx.move_to(0, 10).text("Press E to confirm")
+        ctx.move_to(0, 10).text("E: confirm | F: cancel")
         remaining = (self.ICE_CONFIRM_TIMEOUT_MS - self.ice_confirm_timer) / 1000
         ctx.font_size = 20
-        remaining_str = str(int(remaining * 10) / 10) + "s"
+        remaining_str = str(int(remaining) + 1) + "s"
         ctx.move_to(0, 50).text("(" + remaining_str + ")")
 
     def _draw_config_confirm(self, ctx):
@@ -568,10 +601,10 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 28
         ctx.move_to(0, -40).text("Enter Config Mode?")
         ctx.font_size = 24
-        ctx.move_to(0, 10).text("Press E to confirm")
+        ctx.move_to(0, 10).text("E: confirm | F: cancel")
         remaining = (self.CONFIG_CONFIRM_TIMEOUT_MS - self.config_confirm_timer) / 1000
         ctx.font_size = 20
-        remaining_str = str(int(remaining * 10) / 10) + "s"
+        remaining_str = str(int(remaining) + 1) + "s"
         ctx.move_to(0, 50).text("(" + remaining_str + ")")
 
     def _draw_ice_screen(self, ctx):
@@ -607,7 +640,7 @@ class ConferenceBadge(app.App, WebServerMixin):
                 ctx.font_size = 20
                 ctx.move_to(0, 20).text("No notes set")
             ctx.font_size = 16
-            ctx.move_to(0, 90).text("B/F: exit")
+            ctx.move_to(0, 90).text("B: back | F: exit")
 
 
 __app_export__ = ConferenceBadge

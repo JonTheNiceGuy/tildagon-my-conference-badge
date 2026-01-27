@@ -22,7 +22,7 @@ IMAGE_FIELD = "__image__"
 EVENT_LOGO_FILENAME = "event_logo.jpg"
 EVENT_LOGO_FIELD = "__event_logo__"
 
-# Colour definitions (16 HTML named colours)
+# Colour definitions (16 HTML named colours for web UI)
 COLOURS = {
     "black": (0, 0, 0),
     "white": (255, 255, 255),
@@ -43,6 +43,47 @@ COLOURS = {
 }
 
 COLOUR_NAMES = list(COLOURS.keys())
+
+# 8-colour CTX palette (the only colours that render distinctly on the display)
+CTX_COLOURS = {
+    "black": (0, 0, 0),
+    "red": (255, 0, 0),
+    "green": (0, 255, 0),
+    "blue": (0, 0, 255),
+    "yellow": (255, 255, 0),
+    "magenta": (255, 0, 255),
+    "cyan": (0, 255, 255),
+    "white": (255, 255, 255),
+}
+
+CTX_COLOUR_NAMES = list(CTX_COLOURS.keys())
+
+# Default indicator colours based on value background
+# Format: vbg -> (incomplete, complete)
+INDICATOR_DEFAULTS = {
+    "black": ("blue", "white"),
+    "red": ("black", "white"),
+    "green": ("black", "white"),
+    "blue": ("black", "white"),
+    "yellow": ("blue", "black"),
+    "magenta": ("black", "white"),
+    "cyan": ("blue", "black"),
+    "white": ("blue", "black"),
+}
+
+
+def get_indicator_colours(vbg_name):
+    """Get default indicator colours for a given value background."""
+    if vbg_name in INDICATOR_DEFAULTS:
+        return INDICATOR_DEFAULTS[vbg_name]
+    return ("blue", "white")  # Fallback
+
+
+def ctx_colour_rgb(name, default):
+    """Get RGB tuple for a CTX colour name, with fallback."""
+    if name and name in CTX_COLOURS:
+        return CTX_COLOURS[name]
+    return default
 
 
 def colour_rgb(name, default):
@@ -88,19 +129,24 @@ def get_app_path():
 
 
 def generate_token():
-    """Generate a 4-character hex session token."""
+    """Generate a 4-character human-friendly session token.
+
+    Uses a 30-character set excluding ambiguous characters (0/O, 1/l/I).
+    Provides ~19.6 bits of entropy (810,000 combinations).
+    """
+    # Excludes: 0, 1, i, l, o (ambiguous with O, I, l, 0)
+    chars = "23456789abcdefghjkmnpqrstuvwxyz"
     try:
-        raw = os.urandom(2)
+        raw = os.urandom(4)
         token = ""
         for b in raw:
-            token += "{:02x}".format(b)
-        return token[:4]
+            token += chars[b % len(chars)]
+        return token
     except Exception:
         import random
-        chars = "0123456789abcdef"
         token = ""
         for _ in range(4):
-            token += chars[random.randint(0, 15)]
+            token += chars[random.randint(0, len(chars) - 1)]
         return token
 
 

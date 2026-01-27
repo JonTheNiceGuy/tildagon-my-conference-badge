@@ -7,7 +7,8 @@ import settings
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
-    IMAGE_FIELD, EVENT_LOGO_FIELD, COLOUR_NAMES,
+    IMAGE_FIELD, EVENT_LOGO_FIELD, COLOUR_NAMES, CTX_COLOUR_NAMES,
+    get_indicator_colours,
     display_name, verb_key, field_key, generate_token, format_exception,
     parse_form, html_esc
 )
@@ -32,9 +33,12 @@ except ImportError:
 class WebServerMixin:
     """Mixin class providing web server functionality for badge configuration."""
 
+    MAX_FAILED_ATTEMPTS = 10
+
     def _start_web_server(self):
         """Start the web server and generate QR code."""
         self.session_token = generate_token()
+        self.failed_attempts = 0
 
         wlan = network.WLAN(network.STA_IF)
         if not wlan.isconnected():
@@ -113,15 +117,34 @@ class WebServerMixin:
                 if line.lower().startswith('content-length:'):
                     content_length = int(line.split(':', 1)[1].strip())
 
+            # Check for lockout due to too many failed attempts
+            if self.failed_attempts >= self.MAX_FAILED_ATTEMPTS:
+                error_body = '''<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
+h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius: 8px; color: #a94442; max-width: 400px; margin: 20px auto; }</style>
+</head><body><h1>Locked Out</h1><div class="msg">Too many failed attempts. Press the cancel button (F) on the badge to restart the server. You will need to go to the new URL it provides.</div></body></html>'''
+                response = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + error_body
+                client.send(response.encode('utf-8'))
+                client.close()
+                return
+
             # Check session token
             token_path = "/" + self.session_token
             if not path.startswith(token_path):
+                self.failed_attempts += 1
+                remaining = self.MAX_FAILED_ATTEMPTS - self.failed_attempts
+                if remaining <= 0:
+                    lock_msg = "Server is now locked. Press the cancel button (F) on the badge to restart. You will need to go to the new URL it provides."
+                else:
+                    lock_msg = str(remaining) + " attempts remaining before lockout."
                 error_body = '''<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
 h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius: 8px; color: #a94442; max-width: 400px; margin: 20px auto; }</style>
 </head><body><h1>Access Denied</h1><div class="msg">Failed to access the config page. The session token in the URL is invalid.</div>
-<p>Scan the QR code on the badge to get the correct URL.</p></body></html>'''
+<p>Scan the QR code on the badge to get the correct URL.</p>
+<p style="color:#666;font-size:14px;">''' + lock_msg + '''</p></body></html>'''
                 response = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + error_body
                 client.send(response.encode('utf-8'))
                 client.close()
@@ -145,6 +168,18 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             # Route: image delete
             if method == "POST" and sub_path == "/image/delete":
                 self._handle_image_delete(client)
+                return
+
+            # Route: ping (for connection check)
+            if sub_path == "/ping":
+                client.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nOK")
+                return
+
+            # Route: AJAX save (returns JSON)
+            if method == "POST" and sub_path == "/ajax":
+                result = self._handle_ajax_post(body_bytes.decode('utf-8'))
+                response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n" + result
+                client.send(response.encode('utf-8'))
                 return
 
             # Route: normal form or GET
@@ -175,6 +210,8 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 msg = "Image too large (max 30KB)"
             elif len(body_bytes) < 100:
                 msg = "No image data received"
+            elif body_bytes[:2] != b'\xff\xd8':
+                msg = "Invalid image format (JPEG required)"
             else:
                 with open(self.image_path, 'wb') as f:
                     f.write(body_bytes)
@@ -301,6 +338,12 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                         if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
+                    # Save indicator colour settings (CTX 8-colour palette)
+                    for suffix in ["ind_inc", "ind_com"]:
+                        form_key = suffix + "_" + field
+                        if form_key in data and data[form_key] in CTX_COLOUR_NAMES:
+                            settings.set(field + "_" + suffix, data[form_key])
+
                 # Save ICE settings
                 settings.set(KEY_ICE_PHONE, data.get("ice_phone", ""))
                 settings.set(KEY_ICE_NAME, data.get("ice_name", ""))
@@ -320,6 +363,61 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             tb = format_exception(e)
             print("POST error: " + str(e) + "\n" + tb)
             return self._get_error_page(str(e), tb)
+
+    def _handle_ajax_post(self, body):
+        """Handle AJAX POST - returns JSON."""
+        try:
+            data = parse_form(body)
+            display_fields = settings.get(KEY_DISPLAY_FIELDS) or [KEY_NAME]
+
+            if data.get("action") == "save":
+                for field in display_fields:
+                    if field == IMAGE_FIELD or field == EVENT_LOGO_FIELD:
+                        continue
+                    l1_key = "line1_" + field
+                    l2_key = "line2_" + field
+                    verb_k = "verb_" + field
+
+                    if l1_key in data:
+                        line1 = data[l1_key].strip()
+                        line2 = data.get(l2_key, "").strip()
+                        if line1 and line2:
+                            settings.set(field, [line1, line2])
+                        elif line1:
+                            settings.set(field, [line1])
+                        else:
+                            settings.set(field, "")
+
+                    if verb_k in data:
+                        verb = data[verb_k]
+                        if verb == "are":
+                            settings.set(verb_key(field), verb)
+                        else:
+                            settings.set(verb_key(field), "")
+
+                    for suffix in ["hbg", "hfg", "vbg", "vfg"]:
+                        form_key = suffix + "_" + field
+                        if form_key in data and data[form_key] in COLOUR_NAMES:
+                            settings.set(field + "_" + suffix, data[form_key])
+
+                    for suffix in ["ind_inc", "ind_com"]:
+                        form_key = suffix + "_" + field
+                        if form_key in data and data[form_key] in CTX_COLOUR_NAMES:
+                            settings.set(field + "_" + suffix, data[form_key])
+
+                settings.set(KEY_ICE_PHONE, data.get("ice_phone", ""))
+                settings.set(KEY_ICE_NAME, data.get("ice_name", ""))
+                settings.set(KEY_ICE_NOTES, data.get("ice_notes", ""))
+
+                settings.save()
+                self._load_settings()
+                return '{"ok":true,"message":"Settings saved!"}'
+
+            return '{"ok":false,"message":"Unknown action"}'
+
+        except Exception as e:
+            print("AJAX error: " + str(e))
+            return '{"ok":false,"message":"' + str(e).replace('"', '\\"') + '"}'
 
     def _get_settings_page(self):
         """Generate the settings HTML page."""
@@ -350,32 +448,43 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             vbg = settings.get(field + "_vbg") or "black"
             vfg = settings.get(field + "_vfg") or "white"
 
+            # Indicator colours - get saved or defaults based on vbg
+            default_ind = get_indicator_colours(vbg)
+            ind_inc = settings.get(field + "_ind_inc") or default_ind[0]
+            ind_com = settings.get(field + "_ind_com") or default_ind[1]
+
             field_rows += '''
             <tr>
-                <td>
+                <td colspan="2">
                     my <b>''' + disp_name + '''</b>
                     <select class="verb" name="verb_''' + esc_field + '''">
                         <option value="is" ''' + is_sel + '''>is</option>
                         <option value="are" ''' + are_sel + '''>are</option>
                     </select>
-                    <span class="cbox" id="box_hbg_''' + esc_field + '''" style="background:''' + hbg + '''" onclick="openPicker(''' + "'" + '''hbg_''' + esc_field + "'" + ''')">B</span>
-                    <span class="cbox" id="box_hfg_''' + esc_field + '''" style="background:''' + hfg + '''" onclick="openPicker(''' + "'" + '''hfg_''' + esc_field + "'" + ''')">F</span>
+                </td>
+            </tr>
+            <tr>
+                <td><input type="text" name="line1_''' + esc_field + '''" value="''' + esc_line1 + '''" placeholder="Line 1"></td>
+                <td><input type="text" name="line2_''' + esc_field + '''" value="''' + esc_line2 + '''" placeholder="Line 2 (optional)"></td>
+            </tr>
+            <tr>
+                <td colspan="2" class="colors-row">
+                    <span class="clabel">Header:</span>
+                    <span class="cbox" id="box_hbg_''' + esc_field + '''" style="background:''' + hbg + '''" onclick="openPicker('hbg_''' + esc_field + '''')">B</span>
+                    <span class="cbox" id="box_hfg_''' + esc_field + '''" style="background:''' + hfg + '''" onclick="openPicker('hfg_''' + esc_field + '''')">F</span>
+                    <span class="clabel">Value:</span>
+                    <span class="cbox" id="box_vbg_''' + esc_field + '''" style="background:''' + vbg + '''" onclick="openPicker('vbg_''' + esc_field + '''')">B</span>
+                    <span class="cbox" id="box_vfg_''' + esc_field + '''" style="background:''' + vfg + '''" onclick="openPicker('vfg_''' + esc_field + '''')">F</span>
+                    <span class="clabel">Indicator:</span>
+                    <span class="cbox" id="box_ind_inc_''' + esc_field + '''" style="background:''' + ind_inc + '''" onclick="openCtxPicker('ind_inc_''' + esc_field + '''','vbg_''' + esc_field + '''')">-</span>
+                    <span class="cbox" id="box_ind_com_''' + esc_field + '''" style="background:''' + ind_com + '''" onclick="openCtxPicker('ind_com_''' + esc_field + '''','vbg_''' + esc_field + '''')">+</span>
+                    <button type="button" class="reset-btn" onclick="resetColors('''' + esc_field + '''')">Reset</button>
                     <input type="hidden" name="hbg_''' + esc_field + '''" id="hbg_''' + esc_field + '''" value="''' + hbg + '''">
                     <input type="hidden" name="hfg_''' + esc_field + '''" id="hfg_''' + esc_field + '''" value="''' + hfg + '''">
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    <input type="text" name="line1_''' + esc_field + '''" value="''' + esc_line1 + '''" placeholder="Line 1">
-                    <span class="cbox" id="box_vbg_''' + esc_field + '''" style="background:''' + vbg + '''" onclick="openPicker(''' + "'" + '''vbg_''' + esc_field + "'" + ''')">B</span>
-                    <span class="cbox" id="box_vfg_''' + esc_field + '''" style="background:''' + vfg + '''" onclick="openPicker(''' + "'" + '''vfg_''' + esc_field + "'" + ''')">F</span>
                     <input type="hidden" name="vbg_''' + esc_field + '''" id="vbg_''' + esc_field + '''" value="''' + vbg + '''">
                     <input type="hidden" name="vfg_''' + esc_field + '''" id="vfg_''' + esc_field + '''" value="''' + vfg + '''">
-                </td>
-            </tr>
-            <tr>
-                <td>
-                    <input type="text" name="line2_''' + esc_field + '''" value="''' + esc_line2 + '''" placeholder="Line 2 (optional)">
+                    <input type="hidden" name="ind_inc_''' + esc_field + '''" id="ind_inc_''' + esc_field + '''" value="''' + ind_inc + '''">
+                    <input type="hidden" name="ind_com_''' + esc_field + '''" id="ind_com_''' + esc_field + '''" value="''' + ind_com + '''">
                 </td>
             </tr>'''
 
@@ -402,9 +511,9 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 if field == KEY_NAME or field == IMAGE_FIELD:
                     del_btn = ""
                 elif field == EVENT_LOGO_FIELD:
-                    del_btn = '<button type="submit" name="delete" value="' + esc_field + '" style="background:#f0ad4e;color:white;border:none;">Hide</button>'
+                    del_btn = '<button type="submit" name="delete" value="' + esc_field + '" onclick="return confirm(\'Hide Event Logo?\')" style="background:#f0ad4e;color:white;border:none;">Hide</button>'
                 else:
-                    del_btn = '<button type="submit" name="delete" value="' + esc_field + '" style="background:#d9534f;color:white;border:none;">Remove</button>'
+                    del_btn = '<button type="submit" name="delete" value="' + esc_field + '" onclick="return confirm(\'Remove field: ' + disp + '?\')" style="background:#d9534f;color:white;border:none;">Remove</button>'
                 reorder_html += '''
                 <div style="margin: 5px 0;">
                     <span style="display: inline-block; width: 120px;">''' + disp + '''</span>
@@ -447,9 +556,20 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         select { background: white; }
         select.verb { width: auto; display: inline; padding: 4px 8px; }
         .cbox { display: inline-block; width: 24px; height: 24px; border: 2px solid #333; border-radius: 4px; cursor: pointer; text-align: center; line-height: 24px; font-size: 11px; font-weight: bold; vertical-align: middle; margin-left: 4px; color: white; text-shadow: 0 0 2px black, 0 0 2px black; }
-        #colorModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; align-items: center; justify-content: center; }
+        .clabel { font-size: 12px; color: #666; margin-left: 10px; }
+        .clabel:first-child { margin-left: 0; }
+        .colors-row { white-space: nowrap; }
+        .reset-btn { padding: 4px 8px; font-size: 12px; margin-left: 10px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; }
+        .reset-btn:hover { background: #e0e0e0; }
+        .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 12px 24px; border-radius: 8px; z-index: 1000; display: none; }
+        .toast.success { background: #4CAF50; }
+        .toast.error { background: #d9534f; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; }
+        .modal-content { background: white; padding: 30px; border-radius: 12px; text-align: center; max-width: 320px; margin: 20px; }
+        .modal-content h2 { color: #d9534f; margin-top: 0; }
+        #colorModal, #ctxColorModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; align-items: center; justify-content: center; }
         .cpicker { background: white; padding: 20px; border-radius: 8px; text-align: center; max-width: 300px; }
-        .cbtn { display: inline-block; width: 36px; height: 36px; margin: 4px; border: 2px solid #333; border-radius: 4px; cursor: pointer; }
+        .cbtn { display: inline-block; width: 48px; height: 48px; margin: 4px; border: 2px solid #333; border-radius: 4px; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -513,9 +633,30 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         </div>
     </div>
 
+    <div id="ctxColorModal" onclick="closeCtxModal()">
+        <div class="cpicker" onclick="event.stopPropagation()">
+            <p><b>Pick indicator colour</b></p>
+            <p style="font-size:12px;color:#666;">(8 display colours only)</p>
+            <div id="ctxColorBtns"></div>
+            <p style="margin-top:10px;"><button type="button" onclick="closeCtxModal()">Cancel</button></p>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <div id="disconnectModal" class="modal">
+        <div class="modal-content">
+            <h2>Server Stopped</h2>
+            <p>The badge configuration server has been shut down.</p>
+            <p style="color:#666;font-size:14px;">Press the config sequence (button D then button E at the confirm screen) on the badge to restart it. You will need to go to the new URL it provides.</p>
+        </div>
+    </div>
+
     <script>
     var activeInput=null;
+    var activeVbgInput=null;
     var colors=["black","white","gray","silver","maroon","red","purple","fuchsia","green","lime","olive","yellow","navy","blue","teal","aqua"];
+    var ctxColors=["black","red","green","blue","yellow","magenta","cyan","white"];
     var btns="";
     for(var i=0;i<colors.length;i++){
         btns+='<span class="cbtn" style="background:'+colors[i]+'" data-color="'+colors[i]+'"></span>';
@@ -530,6 +671,43 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         document.getElementById(activeInput).value=c;
         document.getElementById("box_"+activeInput).style.background=c;
         closeModal();
+    }
+
+    // CTX 8-colour picker for indicators
+    function openCtxPicker(id,vbgId){
+        activeInput=id;
+        activeVbgInput=vbgId;
+        var vbg=document.getElementById(vbgId).value;
+        // Map 16-colour vbg to CTX equivalent
+        var vbgCtx=vbg;
+        if(vbg=="gray"||vbg=="silver")vbgCtx="white";
+        if(vbg=="maroon")vbgCtx="red";
+        if(vbg=="purple"||vbg=="fuchsia")vbgCtx="magenta";
+        if(vbg=="lime")vbgCtx="green";
+        if(vbg=="olive")vbgCtx="yellow";
+        if(vbg=="navy")vbgCtx="blue";
+        if(vbg=="teal"||vbg=="aqua")vbgCtx="cyan";
+        // Build buttons excluding vbg
+        var btns="";
+        for(var i=0;i<ctxColors.length;i++){
+            var c=ctxColors[i];
+            if(c==vbgCtx){
+                btns+='<span class="cbtn" style="background:'+c+';opacity:0.3;cursor:not-allowed;" title="Cannot match background"></span>';
+            }else{
+                btns+='<span class="cbtn" style="background:'+c+'" data-color="'+c+'"></span>';
+            }
+        }
+        document.getElementById("ctxColorBtns").innerHTML=btns;
+        document.getElementById("ctxColorModal").style.display="flex";
+    }
+    document.getElementById("ctxColorBtns").addEventListener("click",function(e){
+        if(e.target.dataset.color){pickCtxColor(e.target.dataset.color);}
+    });
+    function closeCtxModal(){document.getElementById("ctxColorModal").style.display="none";}
+    function pickCtxColor(c){
+        document.getElementById(activeInput).value=c;
+        document.getElementById("box_"+activeInput).style.background=c;
+        closeCtxModal();
     }
 
     // Image upload
@@ -588,6 +766,59 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             document.getElementById("imgStatus").innerHTML=(t==="OK")?"<b>Image deleted</b>":"<b>"+t+"</b>";
         }).catch(function(){document.getElementById("imgStatus").innerHTML="<b style=color:red>Delete failed</b>";});
     }
+
+    // Reset colors to defaults
+    function resetColors(field){
+        setColor('hbg_'+field,'red');
+        setColor('hfg_'+field,'white');
+        setColor('vbg_'+field,'black');
+        setColor('vfg_'+field,'white');
+        setColor('ind_inc_'+field,'blue');
+        setColor('ind_com_'+field,'white');
+    }
+    function setColor(id,c){
+        document.getElementById(id).value=c;
+        document.getElementById('box_'+id).style.background=c;
+    }
+
+    // Toast notifications
+    function showToast(msg,type){
+        var t=document.getElementById('toast');
+        t.textContent=msg;
+        t.className='toast '+(type||'');
+        t.style.display='block';
+        setTimeout(function(){t.style.display='none';},3000);
+    }
+
+    // AJAX form submission
+    document.querySelector('form[action="''' + action_url + '''"]').addEventListener('submit',function(e){
+        var btn=document.activeElement;
+        if(btn&&btn.name!=='action')return; // Let delete/move/add work normally
+        e.preventDefault();
+        var fd=new FormData(this);
+        fd.append('action','save');
+        fetch("''' + action_url + '''/ajax",{method:'POST',body:new URLSearchParams(fd)})
+        .then(function(r){return r.json();})
+        .then(function(d){
+            if(d.ok){showToast(d.message,'success');}
+            else{showToast(d.message||'Error','error');}
+        })
+        .catch(function(){showToast('Save failed','error');});
+    });
+
+    // Poll server to detect shutdown
+    var pingUrl="''' + action_url + '''/ping";
+    var pingFails=0;
+    function checkServer(){
+        fetch(pingUrl,{method:'GET'}).then(function(r){
+            if(r.ok){pingFails=0;}
+            else{pingFails++;}
+        }).catch(function(){pingFails++;});
+        if(pingFails>=2){
+            document.getElementById('disconnectModal').style.display='flex';
+        }
+    }
+    setInterval(checkServer,3000);
     </script>
 </body>
 </html>'''
