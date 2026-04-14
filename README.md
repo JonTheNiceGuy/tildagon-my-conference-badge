@@ -14,7 +14,9 @@ To get to this, press "B" (top right) and confirm with "E" (bottom left) within 
 
 ## Customising the Conference Logo
 
-This app includes a built-in conference logo (`event_logo.jpg`) that appears in the badge rotation by default. To replace it with your own conference or event logo:
+This app looks for event logos in the `event_images/` directory and lists them alphabetically in the web settings interface, where you can select which one to display. The display name is derived from the filename (e.g. `oggcamp-2026.jpg` becomes `oggcamp 2026`).
+
+To add your own event logo:
 
 1. Prepare your image as a **240x240 pixel JPEG**, under **30KB** in size.
 2. You can use a command like this to convert your source image:
@@ -31,11 +33,10 @@ This app includes a built-in conference logo (`event_logo.jpg`) that appears in 
    left, top = (img.width - size) // 2, (img.height - size) // 2
    img = img.crop((left, top, left + size, top + size))
    img = img.resize((240, 240), Image.Resampling.LANCZOS)
-   img.save('event_logo.jpg', 'JPEG', quality=85)
+   img.save('event_images/myevent-2026.jpg', 'JPEG', quality=85)
    "
    ```
-3. Replace `event_logo.jpg` in the app directory with your new file (keep the same filename).
-4. Optionally, update the display name in `web.py` where it says `"Event Logo"` to match your event.
+3. Place the JPEG in the `event_images/` directory and redeploy. It will appear automatically in the Event Logo selector in the web settings.
 
 The logo can be hidden or reordered via the web settings interface.
 

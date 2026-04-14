@@ -7,8 +7,8 @@ import settings
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
-    IMAGE_FIELD, EVENT_LOGO_FIELD, COLOUR_NAMES, COLOUR_GROUPS,
-    INDICATOR_DEFAULTS,
+    IMAGE_FIELD, EVENT_LOGO_FIELD, KEY_EVENT_LOGO, get_event_logos,
+    COLOUR_NAMES, COLOUR_GROUPS, INDICATOR_DEFAULTS,
     display_name, verb_key, field_key, generate_token, format_exception,
     parse_form, html_esc
 )
@@ -65,6 +65,7 @@ class WebServerMixin:
             print("QR encode error: " + str(e))
 
         self.mode = self.MODE_WEB_SERVER
+        print("Badge config server: " + self.server_url)
         return True
 
     def _stop_web_server(self):
@@ -213,8 +214,14 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             elif body_bytes[:2] != b'\xff\xd8':
                 msg = "Invalid image format (JPEG required)"
             else:
-                with open(self.image_path, 'wb') as f:
+                tmp_path = self.image_path + ".tmp"
+                with open(tmp_path, 'wb') as f:
                     f.write(body_bytes)
+                try:
+                    os.remove(self.image_path)
+                except OSError:
+                    pass
+                os.rename(tmp_path, self.image_path)
                 # Add image to display fields if not already there
                 display_fields = settings.get(KEY_DISPLAY_FIELDS) or [KEY_NAME]
                 if IMAGE_FIELD not in display_fields:
@@ -231,16 +238,15 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         """Handle image delete request."""
         try:
             os.remove(self.image_path)
-            # Remove image from display fields
-            display_fields = settings.get(KEY_DISPLAY_FIELDS) or [KEY_NAME]
-            if IMAGE_FIELD in display_fields:
-                display_fields.remove(IMAGE_FIELD)
-                settings.set(KEY_DISPLAY_FIELDS, display_fields)
-                settings.save()
-            self._load_settings()
-            msg = "OK"
         except OSError:
-            msg = "No image to delete"
+            pass
+        display_fields = settings.get(KEY_DISPLAY_FIELDS) or [KEY_NAME]
+        if IMAGE_FIELD in display_fields:
+            display_fields.remove(IMAGE_FIELD)
+            settings.set(KEY_DISPLAY_FIELDS, display_fields)
+            settings.save()
+        self._load_settings()
+        msg = "OK"
         client.send(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" + msg).encode('utf-8'))
 
     def _handle_post(self, body):
@@ -282,6 +288,20 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                     display_fields.insert(0, EVENT_LOGO_FIELD)
                     settings.set(KEY_DISPLAY_FIELDS, display_fields)
                     message = "Event Logo shown"
+
+            # Handle event logo selection
+            elif data.get("action") == "set_event_logo":
+                choice = data.get("event_logo_choice", "")
+                event_logos = get_event_logos(self.app_path)
+                valid_filenames = [f for _, f in event_logos]
+                if choice in valid_filenames:
+                    settings.set(KEY_EVENT_LOGO, choice)
+                    disp = choice
+                    for n, f in event_logos:
+                        if f == choice:
+                            disp = n
+                            break
+                    message = "Event logo set to: " + disp
 
             # Handle move up
             elif "move_up" in data:
@@ -533,6 +553,28 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         </div>
     </form>'''
 
+        # Event logo selector
+        event_logos = get_event_logos(self.app_path)
+        current_logo = settings.get(KEY_EVENT_LOGO)
+        if event_logos and current_logo not in [f for _, f in event_logos]:
+            current_logo = event_logos[0][1]
+        logo_options = ""
+        for logo_name, logo_file in event_logos:
+            sel = ' selected' if logo_file == current_logo else ''
+            logo_options += '<option value="' + html_esc(logo_file) + '"' + sel + '>' + html_esc(logo_name) + '</option>'
+        if event_logos:
+            event_logo_selector_html = '''
+    <form method="POST" action="''' + "/" + self.session_token + '''">
+        <div class="section">
+            <h2>Event Logo</h2>
+            <select name="event_logo_choice" style="width:auto;margin-right:8px;">''' + logo_options + '''</select>
+            <button type="submit" name="action" value="set_event_logo" class="add-btn">Select</button>
+        </div>
+    </form>'''
+        else:
+            event_logo_selector_html = '''
+    <div class="section"><h2>Event Logo</h2><p style="color:#666;font-size:14px;">No images found in event_images/ folder.</p></div>'''
+
         action_url = "/" + self.session_token
 
         return '''<!DOCTYPE html>
@@ -604,6 +646,8 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
     </form>
 
     ''' + event_hidden_html + '''
+
+    ''' + event_logo_selector_html + '''
 
     <div class="section">
         <h2>Badge Image</h2>

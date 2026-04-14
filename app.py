@@ -12,7 +12,8 @@ from events.input import BUTTON_TYPES, Buttons
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_HAS_STARTED,
     KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
-    IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FILENAME, EVENT_LOGO_FIELD,
+    IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FIELD,
+    KEY_EVENT_LOGO, EVENT_IMAGES_DIR, get_event_logos,
     colour_rgb, display_name, verb_key, get_app_path,
     get_indicator_defaults
 )
@@ -83,7 +84,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         # Image state
         self.app_path = get_app_path()
         self.image_path = self.app_path + "/" + IMAGE_FILENAME
-        self.event_logo_path = self.app_path + "/" + EVENT_LOGO_FILENAME
+        self.event_logo_path = None  # set in _load_settings
 
         # Load settings
         self._load_settings()
@@ -108,6 +109,17 @@ class ConferenceBadge(app.App, WebServerMixin):
         self.ice_phone = settings.get(KEY_ICE_PHONE)
         self.ice_name = settings.get(KEY_ICE_NAME)
         self.ice_notes = settings.get(KEY_ICE_NOTES)
+
+        # Load selected event logo
+        event_logos = get_event_logos(self.app_path)
+        valid_filenames = [f for _, f in event_logos]
+        selected_logo = settings.get(KEY_EVENT_LOGO)
+        if selected_logo not in valid_filenames:
+            selected_logo = valid_filenames[0] if valid_filenames else None
+        if selected_logo:
+            self.event_logo_path = self.app_path + "/" + EVENT_IMAGES_DIR + "/" + selected_logo
+        else:
+            self.event_logo_path = None
 
         # Cache image existence check
         try:
@@ -555,7 +567,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.rgb(*self.bg_color).rectangle(-120, -120, 240, 240).fill()
         try:
             ctx.image(image_path, -120, -120, 240, 240)
-        except Exception:
+        except Exception as e:
+            print("Image error: " + str(e) + " (path: " + str(image_path) + ")")
             ctx.rgb(*self.fg_color)
             ctx.font_size = 20
             ctx.move_to(0, -10).text("Image error")

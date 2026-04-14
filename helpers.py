@@ -19,8 +19,29 @@ IMAGE_FILENAME = "badge_image.jpg"
 IMAGE_FIELD = "__image__"
 
 # Event logo (built-in image)
-EVENT_LOGO_FILENAME = "event_logo.jpg"
 EVENT_LOGO_FIELD = "__event_logo__"
+KEY_EVENT_LOGO = PREFIX + "event_logo"
+EVENT_IMAGES_DIR = "event_images"
+
+
+def get_event_logos(app_path):
+    """Return alphabetically sorted list of (display_name, filename) for event logos.
+
+    Scans app_path/event_images/ for JPEG files. Display name is derived from
+    the filename: extension stripped, hyphens/underscores replaced with spaces,
+    then title-cased. e.g. "emfcamp-2024.jpg" -> "Emfcamp 2024".
+    """
+    logos_dir = app_path + "/" + EVENT_IMAGES_DIR
+    try:
+        files = sorted(os.listdir(logos_dir))
+    except OSError:
+        return []
+    result = []
+    for f in files:
+        if f.lower().endswith(".jpg") or f.lower().endswith(".jpeg"):
+            name = f.rsplit(".", 1)[0].replace("-", " ").replace("_", " ")
+            result.append((name, f))
+    return result
 
 # =============================================================================
 # Full 140 HTML/CSS Named Colours (using floats 0.0-1.0 for ctx.rgb/rgba)
