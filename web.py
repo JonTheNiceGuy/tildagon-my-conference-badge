@@ -640,8 +640,10 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
     <form method="POST" action="''' + action_url + '''">
         <div class="section">
             <h3>Add Field</h3>
-            <input type="text" name="new_field" placeholder="e.g. email, pronouns, company">
+            <input type="text" id="newFieldInput" name="new_field" placeholder="e.g. email, pronouns, company">
             <button type="submit" name="action" value="add_field" class="add-btn">Add</button>
+            <span id="newFieldHint" style="font-size:13px;margin-left:8px;"></span>
+            <p style="font-size:12px;color:#888;margin:4px 0 0;">Shown on badge as <em>my [name] is</em> - keep it short.</p>
         </div>
     </form>
 
@@ -834,6 +836,16 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         if(btn&&btn.name!=='action')return; // Let delete/move/add work normally
         e.preventDefault();
         saveForm();
+    });
+
+    // Field name length hint
+    document.getElementById("newFieldInput").addEventListener("input",function(){
+        var len=this.value.trim().length;
+        var hint=document.getElementById("newFieldHint");
+        if(len===0){hint.textContent="";}
+        else if(len<=8){hint.style.color="green";hint.textContent=len+" chars - looks good";}
+        else if(len<=12){hint.style.color="darkorange";hint.textContent=len+" chars - may appear small on badge";}
+        else{hint.style.color="red";hint.textContent=len+" chars - will appear very small on badge";}
     });
 
     // Poll server to detect shutdown

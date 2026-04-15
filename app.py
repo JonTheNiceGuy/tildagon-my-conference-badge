@@ -519,8 +519,16 @@ class ConferenceBadge(app.App, WebServerMixin):
         # Header
         ctx.font_size = 56
         ctx.rgb(*hfg).move_to(0, -60).text("Hello")
-        ctx.font_size = 28
-        ctx.rgb(*hfg).move_to(0, -30).text("my " + field_label + " " + verb)
+        header_text = "my " + field_label + " " + verb
+        header_w = self.get_usable_width(-30) * 0.9
+        header_font = 16
+        for fs in [28, 24, 20, 18, 16]:
+            ctx.font_size = fs
+            if ctx.text_width(header_text) <= header_w:
+                header_font = fs
+                break
+        ctx.font_size = header_font
+        ctx.rgb(*hfg).move_to(0, -30).text(header_text)
 
         # Value - may be a string or list of up to 2 lines
         lines = []
