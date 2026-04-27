@@ -310,15 +310,13 @@ def get_app_path():
     if sys.implementation.name != "micropython":
         return "."
     try:
-        apps = os.listdir("/apps")
-        for a in apps:
-            try:
-                files = os.listdir("/apps/" + a)
-                if "app.py" in files and "qr.py" in files:
-                    return "/apps/" + a
-            except OSError:
-                pass
-    except OSError:
+        path = __file__
+        if "/" in path:
+            dir_path = path.rsplit("/", 1)[0]
+            if not dir_path.startswith("/"):
+                dir_path = "/" + dir_path
+            return dir_path
+    except NameError:
         pass
     return "."
 
