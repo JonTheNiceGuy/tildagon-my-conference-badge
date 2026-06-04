@@ -27,9 +27,9 @@ EVENT_IMAGES_DIR = "event_images"
 def get_event_logos(app_path):
     """Return alphabetically sorted list of (display_name, filename) for event logos.
 
-    Scans app_path/event_images/ for JPEG files. Display name is derived from
-    the filename: extension stripped, hyphens/underscores replaced with spaces,
-    then title-cased. e.g. "emfcamp-2024.jpg" -> "Emfcamp 2024".
+    Scans app_path/event_images/ for JPEG and PNG files. Display name is derived
+    from the filename: extension stripped, hyphens/underscores replaced with
+    spaces, then title-cased. e.g. "emfcamp-2024.jpg" -> "Emfcamp 2024".
     """
     logos_dir = app_path + "/" + EVENT_IMAGES_DIR
     try:
@@ -38,10 +38,36 @@ def get_event_logos(app_path):
         return []
     result = []
     for f in files:
-        if f.lower().endswith(".jpg") or f.lower().endswith(".jpeg"):
+        lower = f.lower()
+        if lower.endswith(".jpg") or lower.endswith(".jpeg") or lower.endswith(".png"):
             name = f.rsplit(".", 1)[0].replace("-", " ").replace("_", " ")
             result.append((name, f))
     return result
+
+
+def default_event_logo(event_logos):
+    """Choose the default logo filename when the user hasn't selected one.
+
+    Prefers the highest-numbered "emfcamp-YYYY.*" logo (e.g. picks
+    emfcamp-2026 over emfcamp-2024). Falls back to the first available logo
+    if none match that pattern. Returns None if there are no logos.
+
+    `event_logos` is the list of (display_name, filename) from get_event_logos.
+    """
+    if not event_logos:
+        return None
+    best_file = None
+    best_year = -1
+    for _, f in event_logos:
+        lower = f.lower()
+        if lower.startswith("emfcamp-"):
+            year_str = f[len("emfcamp-"):].rsplit(".", 1)[0]
+            if year_str.isdigit() and int(year_str) > best_year:
+                best_year = int(year_str)
+                best_file = f
+    if best_file is not None:
+        return best_file
+    return event_logos[0][1]
 
 # =============================================================================
 # Full 140 HTML/CSS Named Colours (using floats 0.0-1.0 for ctx.rgb/rgba)

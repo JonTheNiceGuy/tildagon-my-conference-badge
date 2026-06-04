@@ -13,12 +13,21 @@ from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_HAS_STARTED,
     KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
     IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FIELD,
-    KEY_EVENT_LOGO, EVENT_IMAGES_DIR, get_event_logos,
+    KEY_EVENT_LOGO, EVENT_IMAGES_DIR, get_event_logos, default_event_logo,
     colour_rgb, display_name, verb_key, get_app_path,
     get_indicator_defaults
 )
 from .web import WebServerMixin
 from .page_indicator import draw_page_indicator
+
+# Set to True to print verbose image/render diagnostics over the mpremote serial
+# console. Leave False for normal use.
+DEBUG = False
+
+
+def _dbg(*parts):
+    if DEBUG:
+        print("[conbadge] " + " ".join(str(p) for p in parts))
 
 
 class ConferenceBadge(app.App, WebServerMixin):
@@ -86,7 +95,9 @@ class ConferenceBadge(app.App, WebServerMixin):
         self.image_path = self.app_path + "/" + IMAGE_FILENAME
         self.event_logo_path = None  # set in _load_settings
 
-        # Load settings
+        # Settings are reloaded only when the web server marks them dirty,
+        # not every frame (see update() and WebServerMixin._persist_settings).
+        self._settings_dirty = False
         self._load_settings()
 
     # --- Settings ---
@@ -115,11 +126,15 @@ class ConferenceBadge(app.App, WebServerMixin):
         valid_filenames = [f for _, f in event_logos]
         selected_logo = settings.get(KEY_EVENT_LOGO)
         if selected_logo not in valid_filenames:
-            selected_logo = valid_filenames[0] if valid_filenames else None
+            selected_logo = default_event_logo(event_logos)
         if selected_logo:
             self.event_logo_path = self.app_path + "/" + EVENT_IMAGES_DIR + "/" + selected_logo
         else:
             self.event_logo_path = None
+        _dbg("load_settings app_path=", self.app_path,
+             "logos=", valid_filenames,
+             "selected=", repr(selected_logo),
+             "event_logo_path=", repr(self.event_logo_path))
 
         # Cache image existence check
         try:
@@ -212,7 +227,9 @@ class ConferenceBadge(app.App, WebServerMixin):
             await render_update()
 
     def update(self, delta):
-        self._load_settings()
+        if self._settings_dirty:
+            self._settings_dirty = False
+            self._load_settings()
 
         if self.mode == self.MODE_SPLASH:
             self._update_splash(delta)
@@ -487,6 +504,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             return
 
         field_key = self.display_fields[self.current_page % len(self.display_fields)]
+        _dbg("draw_badge_page page=", self.current_page, "field=", field_key)
 
         # Image pages (use default indicator colors for black background)
         if field_key == IMAGE_FIELD:
@@ -573,9 +591,21 @@ class ConferenceBadge(app.App, WebServerMixin):
     def _draw_image_page(self, ctx, image_path):
         """Draw an image page."""
         ctx.rgb(*self.bg_color).rectangle(-120, -120, 240, 240).fill()
+        _dbg("draw_image_page path=", repr(image_path))
+        if image_path is None:
+            _dbg("  -> image_path is None, nothing to draw")
+        else:
+            try:
+                st = os.stat(image_path)
+                _dbg("  stat ok, size=", st[6], "bytes")
+            except Exception as e:
+                _dbg("  stat FAILED:", repr(e))
         try:
+            _dbg("  calling ctx.image(...)")
             ctx.image(image_path, -120, -120, 240, 240)
+            _dbg("  ctx.image returned OK")
         except Exception as e:
+            _dbg("  ctx.image RAISED:", repr(e))
             print("Image error: " + str(e) + " (path: " + str(image_path) + ")")
             ctx.rgb(*self.fg_color)
             ctx.font_size = 20

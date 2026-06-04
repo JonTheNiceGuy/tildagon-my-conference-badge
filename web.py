@@ -8,6 +8,7 @@ import settings
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
     IMAGE_FIELD, EVENT_LOGO_FIELD, KEY_EVENT_LOGO, get_event_logos,
+    default_event_logo,
     COLOUR_NAMES, COLOUR_GROUPS, INDICATOR_DEFAULTS,
     display_name, verb_key, field_key, generate_token, format_exception,
     parse_form, html_esc
@@ -34,6 +35,11 @@ class WebServerMixin:
     """Mixin class providing web server functionality for badge configuration."""
 
     MAX_FAILED_ATTEMPTS = 10
+
+    def _persist_settings(self):
+        """Save settings and flag the badge to reload them on its next update."""
+        settings.save()
+        self._settings_dirty = True
 
     def _start_web_server(self):
         """Start the web server and generate QR code."""
@@ -227,7 +233,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 if IMAGE_FIELD not in display_fields:
                     display_fields.append(IMAGE_FIELD)
                     settings.set(KEY_DISPLAY_FIELDS, display_fields)
-                    settings.save()
+                    self._persist_settings()
                 self._load_settings()
                 msg = "OK"
         except Exception as e:
@@ -244,7 +250,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         if IMAGE_FIELD in display_fields:
             display_fields.remove(IMAGE_FIELD)
             settings.set(KEY_DISPLAY_FIELDS, display_fields)
-            settings.save()
+            self._persist_settings()
         self._load_settings()
         msg = "OK"
         client.send(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" + msg).encode('utf-8'))
@@ -372,7 +378,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 message = "All settings saved!"
 
             try:
-                settings.save()
+                self._persist_settings()
             except Exception as e:
                 print("Save error: " + str(e))
 
@@ -429,7 +435,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                 settings.set(KEY_ICE_NAME, data.get("ice_name", ""))
                 settings.set(KEY_ICE_NOTES, data.get("ice_notes", ""))
 
-                settings.save()
+                self._persist_settings()
                 self._load_settings()
                 return '{"ok":true,"message":"Settings saved!"}'
 
@@ -557,7 +563,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         event_logos = get_event_logos(self.app_path)
         current_logo = settings.get(KEY_EVENT_LOGO)
         if event_logos and current_logo not in [f for _, f in event_logos]:
-            current_logo = event_logos[0][1]
+            current_logo = default_event_logo(event_logos)
         logo_options = ""
         for logo_name, logo_file in event_logos:
             sel = ' selected' if logo_file == current_logo else ''
