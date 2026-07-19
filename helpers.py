@@ -1,5 +1,6 @@
 """Helper functions and constants for Conference Badge app."""
 
+import binascii
 import os
 import sys
 
@@ -348,12 +349,14 @@ def get_app_path():
 
 
 def generate_token():
-    """Generate a 4-character human-friendly session token.
+    """Generate a 4-character human-friendly code for the local network backend.
 
     Uses a 30-character set excluding ambiguous characters (0/O, 1/l/I).
-    Provides ~19.6 bits of entropy (810,000 combinations).
+    Provides ~19.6 bits of entropy (810,000 combinations) - fine for a
+    manually-typed code on a private link guarded by a failed-attempt
+    lockout (see WebServerMixin.MAX_FAILED_ATTEMPTS), unlike the relay's
+    public session id which needs to stand on its own with no lockout.
     """
-    # Excludes: 0, 1, i, l, o (ambiguous with O, I, l, 0)
     chars = "23456789abcdefghjkmnpqrstuvwxyz"
     try:
         raw = os.urandom(4)
@@ -367,6 +370,18 @@ def generate_token():
         for _ in range(4):
             token += chars[random.randint(0, len(chars) - 1)]
         return token
+
+
+def b64encode(data):
+    """Base64-encode bytes to a str, with no trailing newline."""
+    return binascii.b2a_base64(data).decode("ascii").strip()
+
+
+def b64decode(s):
+    """Base64-decode a str (or bytes) to bytes."""
+    if isinstance(s, str):
+        s = s.encode("ascii")
+    return binascii.a2b_base64(s)
 
 
 def format_exception(e):

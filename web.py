@@ -1,9 +1,22 @@
-"""Web server functionality for Conference Badge app."""
+"""Web server functionality for Conference Badge app.
 
+The badge can't listen for inbound connections while it's on a conference
+network with client isolation enabled - a phone on the same wifi still
+can't reach another device's IP. So instead of running a local HTTP server,
+the badge polls out to a small relay (see server/) that assigns it a
+public session URL. See server/README.md for the full protocol.
+"""
+
+import json
 import os
 import socket
 import network
 import settings
+
+try:
+    import ssl
+except ImportError:
+    import ussl as ssl
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
@@ -11,12 +24,29 @@ from .helpers import (
     default_event_logo,
     COLOUR_NAMES, COLOUR_GROUPS, INDICATOR_DEFAULTS,
     display_name, verb_key, field_key, generate_token, format_exception,
-    parse_form, html_esc
+    parse_form, html_esc, b64encode, b64decode
 )
+
+try:
+    from .qr import encode as qr_encode
+except ImportError:
+    from qr import encode as qr_encode
+
+RELAY_HOST = "mcb.g7vri.me"
+RELAY_PORT = 443
+RELAY_BASE_URL = "https://" + RELAY_HOST
+# Socket timeout for register/respond/delete calls to the relay.
+RELAY_TIMEOUT = 8
+# Socket timeout for the long-poll GET. Must exceed the relay's own
+# POLL_TIMEOUT_SECONDS (server/relay/__init__.py, 5s by default) so the
+# badge doesn't time out its own socket right as the relay is about to
+# reply with a 204. This directly bounds how long the badge's render loop
+# stalls each idle poll cycle, so keep both values small.
+RELAY_POLL_SOCKET_TIMEOUT = 8
 
 
 def _generate_port():
-    """Generate a random port between 3000 and 3999."""
+    """Generate a random port between 3000 and 3999 for the local backend."""
     try:
         raw = os.urandom(2)
         value = (raw[0] << 8) | raw[1]
@@ -25,81 +55,211 @@ def _generate_port():
         import random
         return random.randint(3000, 3999)
 
-try:
-    from .qr import encode as qr_encode
-except ImportError:
-    from qr import encode as qr_encode
+
+def _https_json_request(host, port, method, path, payload=None, timeout=RELAY_TIMEOUT):
+    """Make a JSON request to the relay over TLS. Returns (status, dict_or_None).
+
+    Returns (None, None) on any connection/timeout error so callers can
+    treat it as "try again next cycle" rather than a hard failure.
+    """
+    body = b""
+    header_lines = ["Host: " + host, "Connection: close", "Accept: application/json"]
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        header_lines.append("Content-Type: application/json")
+        header_lines.append("Content-Length: " + str(len(body)))
+    request_text = method + " " + path + " HTTP/1.1\r\n" + "\r\n".join(header_lines) + "\r\n\r\n"
+
+    sock = None
+    tls = None
+    try:
+        addr = socket.getaddrinfo(host, port)[0][-1]
+        sock = socket.socket()
+        sock.settimeout(timeout)
+        sock.connect(addr)
+        tls = ssl.wrap_socket(sock, server_hostname=host)
+        tls.write(request_text.encode("utf-8"))
+        if body:
+            tls.write(body)
+
+        raw = b""
+        while b"\r\n\r\n" not in raw:
+            chunk = tls.read(1024)
+            if not chunk:
+                break
+            raw += chunk
+        header_end = raw.find(b"\r\n\r\n")
+        if header_end == -1:
+            return None, None
+
+        resp_header_lines = raw[:header_end].decode("utf-8").split("\r\n")
+        status = int(resp_header_lines[0].split(" ")[1])
+        resp_body = raw[header_end + 4:]
+
+        content_length = 0
+        for line in resp_header_lines[1:]:
+            if line.lower().startswith("content-length:"):
+                content_length = int(line.split(":", 1)[1].strip())
+
+        while len(resp_body) < content_length:
+            chunk = tls.read(content_length - len(resp_body))
+            if not chunk:
+                break
+            resp_body += chunk
+
+        if not resp_body:
+            return status, None
+        return status, json.loads(resp_body.decode("utf-8"))
+    except Exception as e:
+        print("Relay request error: " + str(e))
+        return None, None
+    finally:
+        if tls is not None:
+            try:
+                tls.close()
+            except Exception:
+                pass
+        elif sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 class WebServerMixin:
-    """Mixin class providing web server functionality for badge configuration."""
+    """Mixin class providing web server functionality for badge configuration.
 
-    MAX_FAILED_ATTEMPTS = 10
+    Two backends share everything downstream of routing (settings page,
+    form handling, image upload): "relay" polls out to server/ so it works
+    behind client isolation; "local" runs the badge's own listening socket,
+    for networks without isolation where that's simpler and needs no
+    internet access at all.
+    """
+
+    MAX_FAILED_ATTEMPTS = 10  # local backend only - the relay's session id
+                               # is high-entropy enough not to need a lockout
 
     def _persist_settings(self):
         """Save settings and flag the badge to reload them on its next update."""
         settings.save()
         self._settings_dirty = True
 
-    def _start_web_server(self):
-        """Start the web server and generate QR code."""
-        self.session_token = generate_token()
-        self.failed_attempts = 0
+    # --- Relay backend ---
 
+    def _start_relay_server(self):
+        """Register a session with the config relay and generate its QR code."""
         wlan = network.WLAN(network.STA_IF)
         if not wlan.isconnected():
             return False
 
-        self.ip_address = wlan.ifconfig()[0]
-        self.port = _generate_port()
-        self.server_url = "http://" + self.ip_address + ":" + str(self.port) + "/" + self.session_token
-
-        try:
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind(('0.0.0.0', self.port))
-            self.server_socket.listen(1)
-            self.server_socket.setblocking(False)
-        except Exception as e:
-            print("Server start error: " + str(e))
+        status, resp = _https_json_request(RELAY_HOST, RELAY_PORT, "POST", "/api/session")
+        if status != 201 or not resp or not resp.get("session_id"):
+            print("Relay registration failed: " + str(status))
             return False
 
-        # Generate QR code
+        self.session_id = resp["session_id"]
+        self.active_token = self.session_id
+        self.display_host = RELAY_HOST
+        self.display_code = self.session_id
+        self.server_url = RELAY_BASE_URL + "/" + self.session_id
+
         try:
             self.qr_matrix = qr_encode(self.server_url)
         except Exception as e:
             print("QR encode error: " + str(e))
 
+        self.server_backend = "relay"
         self.mode = self.MODE_WEB_SERVER
-        print("Badge config server: " + self.server_url)
+        print("Badge config server (relay): " + self.server_url)
         return True
 
-    def _stop_web_server(self):
-        """Stop the web server."""
-        if self.server_socket:
-            try:
-                self.server_socket.close()
-            except:
-                pass
-            self.server_socket = None
-        self.mode = self.MODE_BADGE
-        self.qr_matrix = None
-        self._load_settings()
+    def _poll_relay_server(self):
+        """Long-poll the relay for a pending browser request and answer it."""
+        status, resp = _https_json_request(
+            RELAY_HOST, RELAY_PORT, "GET",
+            "/api/session/" + self.session_id + "/poll",
+            timeout=RELAY_POLL_SOCKET_TIMEOUT,
+        )
 
-    def _poll_server(self):
-        """Check for incoming HTTP requests (non-blocking)."""
+        if status == 404:
+            # The relay dropped this session (expired or was never valid) -
+            # there's nothing left to poll for, so stop trying.
+            print("Relay session expired")
+            self._stop_web_server()
+            return
+
+        if status != 200 or not resp or not resp.get("request"):
+            return  # 204 (nothing pending) or a transient network error - retry next cycle
+
+        req = resp["request"]
+        method = req.get("method", "GET")
+        sub_path = req.get("path", "/")
+        body_b64 = req.get("body_b64")
+        body_bytes = b64decode(body_b64) if body_b64 else b""
+
+        resp_status, content_type, resp_body = self._dispatch_request(method, sub_path, body_bytes)
+        reply = {
+            "status": resp_status,
+            "content_type": content_type,
+            "body_b64": b64encode(resp_body),
+        }
+        _https_json_request(
+            RELAY_HOST, RELAY_PORT, "POST",
+            "/api/session/" + self.session_id + "/respond/" + req["request_id"],
+            payload=reply,
+        )
+
+    # --- Local network backend ---
+
+    def _start_local_server(self):
+        """Start a local listening socket and generate its QR code."""
+        wlan = network.WLAN(network.STA_IF)
+        if not wlan.isconnected():
+            return False
+
+        self.local_code = generate_token()
+        self.local_failed_attempts = 0
+        ip_address = wlan.ifconfig()[0]
+        port = _generate_port()
+
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind(('0.0.0.0', port))
+            self.server_socket.listen(1)
+            self.server_socket.setblocking(False)
+        except Exception as e:
+            print("Local server start error: " + str(e))
+            return False
+
+        self.active_token = self.local_code
+        self.display_host = ip_address + ":" + str(port)
+        self.display_code = self.local_code
+        self.server_url = "http://" + self.display_host + "/" + self.local_code
+
+        try:
+            self.qr_matrix = qr_encode(self.server_url)
+        except Exception as e:
+            print("QR encode error: " + str(e))
+
+        self.server_backend = "local"
+        self.mode = self.MODE_WEB_SERVER
+        print("Badge config server (local): " + self.server_url)
+        return True
+
+    def _poll_local_server(self):
+        """Check for an incoming local HTTP connection (non-blocking)."""
         if not self.server_socket:
             return
         try:
             client, _ = self.server_socket.accept()
-            self._handle_request(client)
+            self._handle_local_request(client)
         except OSError:
             pass
 
-    def _handle_request(self, client):
-        """Handle an incoming HTTP request."""
+    def _handle_local_request(self, client):
+        """Handle an incoming local HTTP request."""
         try:
-            # Read initial chunk to get headers
             initial = client.recv(4096)
             if not initial:
                 client.close()
@@ -110,56 +270,22 @@ class WebServerMixin:
                 client.close()
                 return
 
-            header_bytes = initial[:header_end]
-            header_str = header_bytes.decode('utf-8')
+            header_str = initial[:header_end].decode('utf-8')
             lines = header_str.split('\r\n')
             first_line = lines[0] if lines else ""
             parts = first_line.split(' ')
             method = parts[0] if parts else "GET"
-            path = parts[1] if len(parts) > 1 else "/"
+            raw_path = parts[1] if len(parts) > 1 else "/"
+            if '?' in raw_path:
+                path, _, query = raw_path.partition('?')
+            else:
+                path, query = raw_path, ""
 
-            # Parse Content-Length
             content_length = 0
             for line in lines[1:]:
                 if line.lower().startswith('content-length:'):
                     content_length = int(line.split(':', 1)[1].strip())
 
-            # Check for lockout due to too many failed attempts
-            if self.failed_attempts >= self.MAX_FAILED_ATTEMPTS:
-                error_body = '''<!DOCTYPE html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
-h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius: 8px; color: #a94442; max-width: 400px; margin: 20px auto; }</style>
-</head><body><h1>Locked Out</h1><div class="msg">Too many failed attempts. Press the cancel button (F) on the badge to restart the server. You will need to go to the new URL it provides.</div></body></html>'''
-                response = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + error_body
-                client.send(response.encode('utf-8'))
-                client.close()
-                return
-
-            # Check session token
-            token_path = "/" + self.session_token
-            if not path.startswith(token_path):
-                self.failed_attempts += 1
-                remaining = self.MAX_FAILED_ATTEMPTS - self.failed_attempts
-                if remaining <= 0:
-                    lock_msg = "Server is now locked. Press the cancel button (F) on the badge to restart. You will need to go to the new URL it provides."
-                else:
-                    lock_msg = str(remaining) + " attempts remaining before lockout."
-                error_body = '''<!DOCTYPE html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
-h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius: 8px; color: #a94442; max-width: 400px; margin: 20px auto; }</style>
-</head><body><h1>Access Denied</h1><div class="msg">Failed to access the config page. The session token in the URL is invalid.</div>
-<p>Scan the QR code on the badge to get the correct URL.</p>
-<p style="color:#666;font-size:14px;">''' + lock_msg + '''</p></body></html>'''
-                response = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + error_body
-                client.send(response.encode('utf-8'))
-                client.close()
-                return
-
-            sub_path = path[len(token_path):]
-
-            # Read body
             body_bytes = initial[header_end + 4:]
             while len(body_bytes) < content_length:
                 chunk = client.recv(4096)
@@ -167,81 +293,173 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
                     break
                 body_bytes += chunk
 
-            # Route: image upload
-            if method == "POST" and sub_path == "/image":
-                self._handle_image_upload(client, body_bytes)
+            token_path = "/" + self.local_code
+            if path == token_path or path.startswith(token_path + "/"):
+                sub_path = path[len(token_path):] or "/"
+                status, content_type, resp_body = self._dispatch_request(method, sub_path, body_bytes)
+                self._send_local_response(client, status, content_type, resp_body)
                 return
 
-            # Route: image delete
-            if method == "POST" and sub_path == "/image/delete":
-                self._handle_image_delete(client)
+            # Not a recognised token path - this is the manual "enter the
+            # code shown on the badge" landing flow, for people who typed
+            # the IP:port in by hand instead of scanning the QR code.
+            entered_code = parse_form(query).get("code", "")
+            if entered_code:
+                if self.local_failed_attempts >= self.MAX_FAILED_ATTEMPTS:
+                    body = self._get_code_entry_page(locked_out=True)
+                    self._send_local_response(client, 403, "text/html", body.encode('utf-8'))
+                    return
+                if entered_code == self.local_code:
+                    self.local_failed_attempts = 0
+                    body = self._get_settings_page()
+                    self._send_local_response(client, 200, "text/html", body.encode('utf-8'))
+                    return
+                self.local_failed_attempts += 1
+                body = self._get_code_entry_page(error=True)
+                self._send_local_response(client, 403, "text/html", body.encode('utf-8'))
                 return
 
-            # Route: ping (for connection check)
-            if sub_path == "/ping":
-                client.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nOK")
-                return
-
-            # Route: AJAX save (returns JSON)
-            if method == "POST" and sub_path == "/ajax":
-                result = self._handle_ajax_post(body_bytes.decode('utf-8'))
-                response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n" + result
-                client.send(response.encode('utf-8'))
-                return
-
-            # Route: normal form or GET
-            if method == "POST":
-                response_body = self._handle_post(body_bytes.decode('utf-8'))
-            else:
-                response_body = self._get_settings_page()
-
-            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + response_body
-            client.send(response.encode('utf-8'))
+            body = self._get_code_entry_page()
+            self._send_local_response(client, 200, "text/html", body.encode('utf-8'))
 
         except Exception as e:
             tb = format_exception(e)
             print("Request error: " + str(e) + "\n" + tb)
             try:
                 error_page = self._get_error_page(str(e), tb)
-                response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + error_page
-                client.send(response.encode('utf-8'))
-            except:
+                self._send_local_response(client, 500, "text/html", error_page.encode('utf-8'))
+            except Exception:
                 pass
         finally:
             client.close()
 
-    def _handle_image_upload(self, client, body_bytes):
-        """Handle image upload - body is raw JPEG bytes."""
+    def _send_local_response(self, client, status, content_type, body_bytes):
+        reason = {200: "OK", 403: "Forbidden", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
+        header = ("HTTP/1.1 " + str(status) + " " + reason +
+                  "\r\nContent-Type: " + content_type + "\r\nConnection: close\r\n\r\n")
+        try:
+            client.send(header.encode('utf-8') + body_bytes)
+        except Exception:
+            pass
+
+    def _get_code_entry_page(self, error=False, locked_out=False):
+        """Landing page shown when the local server is hit without a valid
+        token path - e.g. someone typed the IP:port in by hand."""
+        if locked_out:
+            message = '<div class="msg err">Too many wrong attempts. Press the cancel button (F) on the badge to restart the server, then use the new code it shows.</div>'
+            form = ""
+        else:
+            message = '<div class="msg err">Wrong code, try again.</div>' if error else ""
+            form = '''<form method="GET" action="/">
+        <input type="text" name="code" placeholder="Code from badge" autocapitalize="none" autocomplete="off" maxlength="8">
+        <button type="submit">Go</button>
+    </form>'''
+        return '''<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Badge Settings</title>
+<style>
+body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
+h1 { color: #333; }
+input[type="text"] { font-size: 20px; padding: 12px; width: 160px; text-align: center; border: 1px solid #ccc; border-radius: 4px; }
+button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CAF50; color: white; border: none; border-radius: 4px; }
+.msg { max-width: 320px; margin: 15px auto; padding: 12px; border-radius: 8px; }
+.msg.err { background: #f2dede; color: #a94442; }
+</style>
+</head><body>
+<h1>Badge Settings</h1>
+<p>Enter the code shown on the badge screen.</p>
+''' + message + form + '''
+</body></html>'''
+
+    # --- Shared ---
+
+    def _stop_web_server(self):
+        """Stop whichever backend is running and return to badge mode."""
+        if self.session_id:
+            _https_json_request(RELAY_HOST, RELAY_PORT, "DELETE", "/api/session/" + self.session_id)
+            self.session_id = ""
+        if self.server_socket:
+            try:
+                self.server_socket.close()
+            except Exception:
+                pass
+            self.server_socket = None
+        self.local_code = ""
+        self.server_backend = None
+        self.mode = self.MODE_BADGE
+        self.qr_matrix = None
+        self._load_settings()
+
+    def _poll_server(self):
+        """Poll whichever backend is currently running."""
+        if self.server_backend == "relay":
+            self._poll_relay_server()
+        elif self.server_backend == "local":
+            self._poll_local_server()
+
+    def _dispatch_request(self, method, sub_path, body_bytes):
+        """Route a parsed request to the right handler, regardless of which
+        backend it came from. Returns (status, content_type, body_bytes).
+        """
+        try:
+            if method == "POST" and sub_path == "/image":
+                status, msg = self._handle_image_upload(body_bytes)
+                return status, "text/plain", msg.encode("utf-8")
+
+            if method == "POST" and sub_path == "/image/delete":
+                status, msg = self._handle_image_delete()
+                return status, "text/plain", msg.encode("utf-8")
+
+            if sub_path == "/ping":
+                return 200, "text/plain", b"OK"
+
+            if method == "POST" and sub_path == "/ajax":
+                result = self._handle_ajax_post(body_bytes.decode("utf-8"))
+                return 200, "application/json", result.encode("utf-8")
+
+            if method == "POST":
+                response_body = self._handle_post(body_bytes.decode("utf-8"))
+            else:
+                response_body = self._get_settings_page()
+            return 200, "text/html", response_body.encode("utf-8")
+
+        except Exception as e:
+            tb = format_exception(e)
+            print("Request error: " + str(e) + "\n" + tb)
+            error_page = self._get_error_page(str(e), tb)
+            return 500, "text/html", error_page.encode("utf-8")
+
+    def _handle_image_upload(self, body_bytes):
+        """Handle image upload - body is raw JPEG bytes. Returns (status, message)."""
         try:
             if len(body_bytes) > 35000:
-                msg = "Image too large (max 30KB)"
-            elif len(body_bytes) < 100:
-                msg = "No image data received"
-            elif body_bytes[:2] != b'\xff\xd8':
-                msg = "Invalid image format (JPEG required)"
-            else:
-                tmp_path = self.image_path + ".tmp"
-                with open(tmp_path, 'wb') as f:
-                    f.write(body_bytes)
-                try:
-                    os.remove(self.image_path)
-                except OSError:
-                    pass
-                os.rename(tmp_path, self.image_path)
-                # Add image to display fields if not already there
-                display_fields = settings.get(KEY_DISPLAY_FIELDS) or [KEY_NAME]
-                if IMAGE_FIELD not in display_fields:
-                    display_fields.append(IMAGE_FIELD)
-                    settings.set(KEY_DISPLAY_FIELDS, display_fields)
-                    self._persist_settings()
-                self._load_settings()
-                msg = "OK"
-        except Exception as e:
-            msg = "Error: " + str(e)
-        client.send(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" + msg).encode('utf-8'))
+                return 200, "Image too large (max 30KB)"
+            if len(body_bytes) < 100:
+                return 200, "No image data received"
+            if body_bytes[:2] != b'\xff\xd8':
+                return 200, "Invalid image format (JPEG required)"
 
-    def _handle_image_delete(self, client):
-        """Handle image delete request."""
+            tmp_path = self.image_path + ".tmp"
+            with open(tmp_path, 'wb') as f:
+                f.write(body_bytes)
+            try:
+                os.remove(self.image_path)
+            except OSError:
+                pass
+            os.rename(tmp_path, self.image_path)
+            # Add image to display fields if not already there
+            display_fields = settings.get(KEY_DISPLAY_FIELDS) or [KEY_NAME]
+            if IMAGE_FIELD not in display_fields:
+                display_fields.append(IMAGE_FIELD)
+                settings.set(KEY_DISPLAY_FIELDS, display_fields)
+                self._persist_settings()
+            self._load_settings()
+            return 200, "OK"
+        except Exception as e:
+            return 200, "Error: " + str(e)
+
+    def _handle_image_delete(self):
+        """Handle image delete request. Returns (status, message)."""
         try:
             os.remove(self.image_path)
         except OSError:
@@ -252,8 +470,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             settings.set(KEY_DISPLAY_FIELDS, display_fields)
             self._persist_settings()
         self._load_settings()
-        msg = "OK"
-        client.send(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" + msg).encode('utf-8'))
+        return 200, "OK"
 
     def _handle_post(self, body):
         """Handle POST form submission."""
@@ -553,7 +770,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         event_hidden_html = ""
         if EVENT_LOGO_FIELD not in display_fields:
             event_hidden_html = '''
-    <form method="POST" action="''' + "/" + self.session_token + '''">
+    <form method="POST" action="''' + "/" + self.active_token + '''">
         <div class="section">
             <p>Event Logo is hidden. <button type="submit" name="action" value="show_event_logo" class="add-btn">Show Event Logo</button></p>
         </div>
@@ -570,7 +787,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             logo_options += '<option value="' + html_esc(logo_file) + '"' + sel + '>' + html_esc(logo_name) + '</option>'
         if event_logos:
             event_logo_selector_html = '''
-    <form method="POST" action="''' + "/" + self.session_token + '''">
+    <form method="POST" action="''' + "/" + self.active_token + '''">
         <div class="section">
             <h2>Event Logo</h2>
             <select name="event_logo_choice" style="width:auto;margin-right:8px;">''' + logo_options + '''</select>
@@ -581,7 +798,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
             event_logo_selector_html = '''
     <div class="section"><h2>Event Logo</h2><p style="color:#666;font-size:14px;">No images found in event_images/ folder.</p></div>'''
 
-        action_url = "/" + self.session_token
+        action_url = "/" + self.active_token
 
         return '''<!DOCTYPE html>
 <html>
@@ -872,7 +1089,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
 </html>'''
 
     def _get_success_page(self, message):
-        url = "/" + self.session_token
+        url = "/" + self.active_token
         return '''<!DOCTYPE html>
 <html><head><meta http-equiv="refresh" content="1;url=''' + url + '''">
 <style>body { font-family: sans-serif; text-align: center; padding: 50px; }
@@ -883,7 +1100,7 @@ h1 { color: #a94442; } .msg { background: #f2dede; padding: 20px; border-radius:
         tb_html = ""
         if tb:
             tb_html = '<pre style="background:#333;color:#fff;padding:10px;overflow-x:auto;">' + html_esc(tb) + '</pre>'
-        url = "/" + self.session_token
+        url = "/" + self.active_token
         return '''<!DOCTYPE html>
 <html><head><style>body { font-family: sans-serif; padding: 20px; }
 .err { background: #f2dede; padding: 20px; border-radius: 5px; color: #a94442; }</style>

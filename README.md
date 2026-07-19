@@ -4,7 +4,13 @@ This is my primary use for the Tildagon; telling everyone who I am and how to ge
 
 This app draws on the [hello-name-badge](https://github.com/jake-walker/tildagon-name-badge) app by Jake Walker, and expands it significantly.
 
-If you've already installed Jake's badge app, then it'll immediately know about your name, but to add more details press the "D" button (the bottom button) and confirm you want to start the web server by pressing "E" (bottom left) within 5 seconds. This will open a QR code which will let you customize the settings to your heart's content.
+If you've already installed Jake's badge app, then it'll immediately know about your name, but to add more details press the "D" button (the bottom button) and confirm you want to start the web server by pressing "E" (bottom left) within 5 seconds. You'll then be asked how to reach the config page:
+
+- **A - Local Network**: the badge runs its own HTTP server on whatever wifi network it's joined, with the QR code pointing at its own IP address. Simplest option, no internet required, but it doesn't work on networks with client isolation enabled (common at conferences and hacker events) - a phone on the same wifi still can't reach another device's IP directly.
+- **B - Relay**: the badge makes outbound HTTPS calls to a small relay (the sibling `server/` repo, deployed at `mcb.g7vri.me`) which assigns it a public session URL and shuttles requests/responses between the badge and whoever scans the QR code. Works through client isolation, since the badge only ever initiates the connection. See `server/README.md` (in that repo) for the full protocol and deployment details.
+- **C - BLE**: not implemented yet.
+
+Either way you get a QR code plus, underneath it, the address and a short code as plain text - useful if you'd rather type it in by hand than scan. For the local network option, browsing to the bare IP:port without the code shows a page prompting for it.
 
 Add more details, like your handle on Matrix, Mastodon or your blog address. Set your pronouns and the company you work for.
 
@@ -46,9 +52,12 @@ Please don't hesitate to raise a Pull and Feature Requests against this repo. I 
 
 ## Security issues
 
-I am aware of the fact that using an HTTP server on public wifi isn't a *great* idea. I've tried to reduce the risk slightly by only running the HTTP server while the QR code is on, and by making the target URL have a little bit of randomness to the URL. That said, it's still passing plain-text content over the wire, so if anyone wants to improve this, I'd be grateful for some guidance!
+The config page is only reachable by possession of its session URL or code - there's no login. That means the strength of the protection differs by backend:
 
-If you find any other security issues with this, please do [contact me directly](mailto:my-conf-badge-sec-issue@jon.sprig.gs) and I'll do what I can to help.
+- **Relay**: the session ID is 128 bits of randomness generated fresh by the relay each time you start the web server (never hardcoded, never in source). Sessions expire automatically after a few minutes of inactivity, and all traffic - badge-to-relay and relay-to-browser - is HTTPS.
+- **Local Network**: the code is a short, human-typeable 4 characters, guarded by a 10-attempt lockout (press F on the badge to get a fresh code if it locks). This is plain HTTP, same trade-off the original local server always made, on the assumption that you're on a network you trust and not one with hostile-adjacent devices.
+
+If you find any security issues with this, please do [contact me directly](mailto:my-conf-badge-sec-issue@jon.sprig.gs) and I'll do what I can to help.
 
 ## LLM/"AI" notification
 

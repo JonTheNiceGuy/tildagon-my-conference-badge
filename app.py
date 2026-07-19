@@ -55,6 +55,7 @@ class ConferenceBadge(app.App, WebServerMixin):
     MODE_WEB_PROMPT = 2
     MODE_WEB_SERVER = 3
     MODE_WIFI_ERROR = 4
+    MODE_CONFIG_MENU = 5
 
     SPLASH_DURATION_MS = 10000
     WIFI_ERROR_DURATION_MS = 2000
@@ -84,11 +85,17 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         # Web server state
         self.mode = self.MODE_SPLASH
-        self.server_socket = None
-        self.session_token = ""
-        self.ip_address = None
+        self.server_backend = None  # "local" or "relay" while MODE_WEB_SERVER is active
+        self.server_socket = None  # local backend only
+        self.session_id = ""  # relay backend only
+        self.local_code = ""  # local backend only
+        self.local_failed_attempts = 0
+        self.active_token = ""  # whichever of the above is in use, for URL building
+        self.display_host = ""
+        self.display_code = ""
         self.server_url = ""
         self.qr_matrix = None
+        self.ble_soon_flash_timer = 0
 
         # Image state
         self.app_path = get_app_path()
@@ -237,6 +244,8 @@ class ConferenceBadge(app.App, WebServerMixin):
             self._update_badge(delta)
         elif self.mode == self.MODE_WEB_PROMPT:
             self._update_web_prompt()
+        elif self.mode == self.MODE_CONFIG_MENU:
+            self._update_config_menu(delta)
         elif self.mode == self.MODE_WEB_SERVER:
             self._update_web_server()
         elif self.mode == self.MODE_WIFI_ERROR:
@@ -296,9 +305,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             elif self.config_confirm_mode:
                 self.config_confirm_mode = False
                 self.config_confirm_timer = 0
-                if not self._start_web_server():
-                    self.mode = self.MODE_WIFI_ERROR
-                    self.wifi_error_timer = 0
+                self.mode = self.MODE_CONFIG_MENU
             elif self.ice_screen == 0:
                 self._prev_page()
                 self.page_timer = 0
@@ -326,11 +333,31 @@ class ConferenceBadge(app.App, WebServerMixin):
         """Update web server prompt mode."""
         if self.button_states.get(BUTTON_TYPES["RIGHT"]):
             self.button_states.clear()
-            if not self._start_web_server():
-                self.mode = self.MODE_WIFI_ERROR
-                self.wifi_error_timer = 0
+            self.mode = self.MODE_CONFIG_MENU
 
         if self.button_states.get(BUTTON_TYPES["CANCEL"]):
+            self.button_states.clear()
+            self.mode = self.MODE_BADGE
+
+    def _update_config_menu(self, delta):
+        """Update config method picker mode."""
+        if self.ble_soon_flash_timer > 0:
+            self.ble_soon_flash_timer = max(0, self.ble_soon_flash_timer - delta)
+
+        if self.button_states.get(BUTTON_TYPES["UP"]):  # A - Local Network
+            self.button_states.clear()
+            if not self._start_local_server():
+                self.mode = self.MODE_WIFI_ERROR
+                self.wifi_error_timer = 0
+        elif self.button_states.get(BUTTON_TYPES["RIGHT"]):  # B - Relay
+            self.button_states.clear()
+            if not self._start_relay_server():
+                self.mode = self.MODE_WIFI_ERROR
+                self.wifi_error_timer = 0
+        elif self.button_states.get(BUTTON_TYPES["CONFIRM"]):  # C - BLE (not yet implemented)
+            self.button_states.clear()
+            self.ble_soon_flash_timer = 1500
+        elif self.button_states.get(BUTTON_TYPES["CANCEL"]):
             self.button_states.clear()
             self.mode = self.MODE_BADGE
 
@@ -369,9 +396,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         """End splash screen and go to appropriate mode."""
         self.splash_timer = 0
         if not self._has_settings():
-            if not self._start_web_server():
-                self.mode = self.MODE_WIFI_ERROR
-                self.wifi_error_timer = 0
+            self.mode = self.MODE_CONFIG_MENU
         else:
             self.mode = self.MODE_BADGE
 
@@ -396,6 +421,8 @@ class ConferenceBadge(app.App, WebServerMixin):
             self._draw_splash(ctx)
         elif self.mode == self.MODE_WEB_PROMPT:
             self._draw_web_prompt(ctx)
+        elif self.mode == self.MODE_CONFIG_MENU:
+            self._draw_config_menu(ctx)
         elif self.mode == self.MODE_WEB_SERVER:
             self._draw_web_server(ctx)
         elif self.mode == self.MODE_WIFI_ERROR:
@@ -442,11 +469,61 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 24
         ctx.move_to(0, -40).text("Start Web Settings?")
         ctx.font_size = 20
-        ctx.move_to(0, 0).text("Press B to start")
+        ctx.move_to(0, 0).text("Press B to choose")
         ctx.move_to(0, 30).text("Press F to cancel")
         ctx.rgb(150, 150, 150)
         ctx.font_size = 14
         ctx.move_to(0, 70).text("Requires WiFi connection")
+
+    def _draw_config_menu(self, ctx):
+        """Draw the config method picker (Local Network / Relay / BLE)."""
+        ctx.rgb(0, 0, 0).rectangle(-120, -120, 240, 240).fill()
+        ctx.rgb(255, 255, 255)
+        ctx.font_size = 20
+        ctx.move_to(0, -70).text("Config Method")
+
+        ctx.font_size = 18
+        ctx.move_to(0, -25).text("A: Local Network")
+        ctx.move_to(0, 5).text("B: Relay (Internet)")
+
+        if self.ble_soon_flash_timer > 0:
+            ctx.rgb(255, 200, 0)
+            ctx.move_to(0, 35).text("C: BLE - coming soon!")
+        else:
+            ctx.rgb(120, 120, 120)
+            ctx.move_to(0, 35).text("C: BLE (not yet)")
+
+        ctx.rgb(150, 150, 150)
+        ctx.font_size = 14
+        ctx.move_to(0, 75).text("F to cancel")
+
+    def _fit_token_lines(self, ctx, text, y_position, max_lines=2):
+        """Fit a single unbroken token (no spaces, e.g. an IP:port or a
+        code) to the circular screen: shrink font first, then break
+        mid-string if it still doesn't fit even at the smallest size."""
+        max_width = self.get_usable_width(y_position) * 0.9
+        if max_width <= 0:
+            max_width = 1
+        for font_size in self.FONT_SIZES:
+            ctx.font_size = font_size
+            if ctx.text_width(text) <= max_width:
+                return font_size, [text]
+
+        ctx.font_size = self.MIN_FONT_SIZE
+        lines = []
+        current = ""
+        for ch in text:
+            test = current + ch
+            if not current or ctx.text_width(test) <= max_width:
+                current = test
+            else:
+                lines.append(current)
+                current = ch
+                if len(lines) >= max_lines - 1:
+                    break
+        if current:
+            lines.append(current)
+        return self.MIN_FONT_SIZE, lines[:max_lines]
 
     def _draw_web_server(self, ctx):
         """Draw web server screen with QR code."""
@@ -470,12 +547,25 @@ class ConferenceBadge(app.App, WebServerMixin):
             qr_bottom = offset_y + total_size + 12 + 4
 
         ctx.rgb(255, 0, 0)
-        font_size, _ = self.fit_text(ctx, self.server_url, qr_bottom)
-        ctx.font_size = min(font_size, 16)
-        ctx.move_to(0, qr_bottom).text(self.server_url)
+        y = qr_bottom
 
-        ctx.font_size = 16
-        ctx.move_to(0, qr_bottom + 20).text("F to stop server")
+        host_font, host_lines = self._fit_token_lines(ctx, self.display_host or "", y)
+        ctx.font_size = host_font
+        for line in host_lines:
+            ctx.move_to(0, y).text(line)
+            y += host_font + 2
+
+        code_text = "code: " + (self.display_code or "")
+        code_font, code_lines = self._fit_token_lines(ctx, code_text, y + 2)
+        ctx.font_size = code_font
+        y += 4
+        for line in code_lines:
+            y += code_font
+            ctx.move_to(0, y).text(line)
+
+        ctx.rgb(0, 0, 0)
+        ctx.font_size = 14
+        ctx.move_to(0, y + 18).text("F to stop server")
 
     def _draw_wifi_error(self, ctx):
         """Draw WiFi not connected error screen."""
