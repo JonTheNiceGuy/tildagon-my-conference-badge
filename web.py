@@ -56,12 +56,19 @@ def _generate_port():
         return random.randint(3000, 3999)
 
 
+_last_relay_error = ""  # set on connection failure, for diagnosable error screens
+
+
 def _https_json_request(host, port, method, path, payload=None, timeout=RELAY_TIMEOUT):
     """Make a JSON request to the relay over TLS. Returns (status, dict_or_None).
 
     Returns (None, None) on any connection/timeout error so callers can
-    treat it as "try again next cycle" rather than a hard failure.
+    treat it as "try again next cycle" rather than a hard failure. The
+    exception text is stashed in module-level `_last_relay_error` so a
+    caller that DOES want to fail hard (e.g. _start_relay_server) can show
+    something more useful than a generic message.
     """
+    global _last_relay_error
     body = b""
     header_lines = ["Host: " + host, "Connection: close", "Accept: application/json"]
     if payload is not None:
@@ -111,7 +118,8 @@ def _https_json_request(host, port, method, path, payload=None, timeout=RELAY_TI
             return status, None
         return status, json.loads(resp_body.decode("utf-8"))
     except Exception as e:
-        print("Relay request error: " + str(e))
+        _last_relay_error = str(e)
+        print("Relay request error: " + _last_relay_error)
         return None, None
     finally:
         if tls is not None:
@@ -150,11 +158,16 @@ class WebServerMixin:
         """Register a session with the config relay and generate its QR code."""
         wlan = network.WLAN(network.STA_IF)
         if not wlan.isconnected():
+            self.start_error = "No WiFi connection"
             return False
 
         status, resp = _https_json_request(RELAY_HOST, RELAY_PORT, "POST", "/api/session")
         if status != 201 or not resp or not resp.get("session_id"):
-            print("Relay registration failed: " + str(status))
+            if status is None:
+                self.start_error = "Can't reach " + RELAY_HOST + (": " + _last_relay_error if _last_relay_error else "")
+            else:
+                self.start_error = "Relay error (HTTP " + str(status) + ")"
+            print("Relay registration failed: " + str(status) + " " + self.start_error)
             return False
 
         self.session_id = resp["session_id"]
@@ -215,6 +228,7 @@ class WebServerMixin:
         """Start a local listening socket and generate its QR code."""
         wlan = network.WLAN(network.STA_IF)
         if not wlan.isconnected():
+            self.start_error = "No WiFi connection"
             return False
 
         self.local_code = generate_token()
@@ -229,7 +243,8 @@ class WebServerMixin:
             self.server_socket.listen(1)
             self.server_socket.setblocking(False)
         except Exception as e:
-            print("Local server start error: " + str(e))
+            self.start_error = "Local server error: " + str(e)
+            print(self.start_error)
             return False
 
         self.active_token = self.local_code

@@ -96,6 +96,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         self.server_url = ""
         self.qr_matrix = None
         self.ble_soon_flash_timer = 0
+        self.start_error = ""
 
         # Image state
         self.app_path = get_app_path()
@@ -511,19 +512,22 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         ctx.font_size = self.MIN_FONT_SIZE
         lines = []
-        current = ""
-        for ch in text:
-            test = current + ch
-            if not current or ctx.text_width(test) <= max_width:
-                current = test
-            else:
-                lines.append(current)
-                current = ch
-                if len(lines) >= max_lines - 1:
+        remaining = text
+        while remaining and len(lines) < max_lines - 1:
+            current = ""
+            for ch in remaining:
+                test = current + ch
+                if not current or ctx.text_width(test) <= max_width:
+                    current = test
+                else:
                     break
-        if current:
             lines.append(current)
-        return self.MIN_FONT_SIZE, lines[:max_lines]
+            remaining = remaining[len(current):]
+        if remaining:
+            # Last line gets everything left over, even if it overflows -
+            # better visible-but-cramped than silently dropped.
+            lines.append(remaining)
+        return self.MIN_FONT_SIZE, lines
 
     def _draw_web_server(self, ctx):
         """Draw web server screen with QR code."""
@@ -568,13 +572,18 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.move_to(0, y + 18).text("F to stop server")
 
     def _draw_wifi_error(self, ctx):
-        """Draw WiFi not connected error screen."""
+        """Draw the config-start error screen."""
         ctx.rgb(100, 0, 0).rectangle(-120, -120, 240, 240).fill()
         ctx.rgb(255, 255, 255)
-        ctx.font_size = 24
-        ctx.move_to(0, -20).text("WiFi not connected")
-        ctx.font_size = 18
-        ctx.move_to(0, 20).text("Check WiFi settings")
+        message = self.start_error or "Couldn't start config server"
+        font_size, lines = self.fit_text(ctx, message, -20)
+        ctx.font_size = font_size
+        y = -20 - (len(lines) - 1) * (font_size + 4) // 2
+        for line in lines:
+            ctx.move_to(0, y).text(line)
+            y += font_size + 4
+        ctx.font_size = 16
+        ctx.move_to(0, y + 14).text("Returning...")
 
     def _get_field_colours(self, field_key):
         """Get per-field colours, falling back to defaults."""
