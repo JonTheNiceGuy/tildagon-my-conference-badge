@@ -10,7 +10,7 @@ If you've already installed Jake's badge app, then it'll immediately know about 
 - **B - Relay**: the badge makes outbound HTTPS calls to a small relay (the sibling `server/` repo, deployed at `mcb.g7vri.me`) which assigns it a public session URL and shuttles requests/responses between the badge and whoever scans the QR code. Works through client isolation, since the badge only ever initiates the connection. See `server/README.md` (in that repo) for the full protocol and deployment details.
 - **C - BLE**: not implemented yet.
 
-Either way you get a QR code plus, underneath it, the address and a short code as plain text - useful if you'd rather type it in by hand than scan. For the local network option, browsing to the bare IP:port without the code shows a page prompting for it.
+Either way you get a QR code plus, underneath it, the address and a short code as plain text - useful if you'd rather type it in by hand than scan. For the local network option, browsing to the bare IP:port without the code shows a page prompting for it. For the relay, browsing to `mcb.g7vri.me` prompts for the short code shown on the badge, then - as a second step - a confirmation code that only appears on the badge's own screen once the first code's been entered; this two-step split means a remote attacker guessing the first code blind never sees the second, since it's only ever rendered on the physical badge.
 
 Add more details, like your handle on Matrix, Mastodon or your blog address. Set your pronouns and the company you work for.
 

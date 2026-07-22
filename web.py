@@ -10,6 +10,7 @@ public session URL. See server/README.md for the full protocol.
 import json
 import os
 import socket
+import time
 import network
 import settings
 
@@ -154,6 +155,28 @@ class WebServerMixin:
 
     # --- Relay backend ---
 
+    def _device_attestation(self):
+        """Best-effort hardware proof of which physical badge this is, for
+        the relay's optional per-device rate limit (server/relay/oracle.py).
+        Not required - registration works fine without it - so any failure
+        here (no HMAC key provisioned, clock not synced yet) just means we
+        register unattested rather than blocking config entirely.
+        """
+        try:
+            now = time.time()
+            if now < 757382400:  # roughly 2024-01-01 in either 1970 or
+                return None      # 2000 epoch - clock isn't synced yet
+            from tildagon import HMAC
+            wlan = network.WLAN(network.STA_IF)
+            mac = "-".join("%02X" % b for b in wlan.config('mac'))
+            message = mac + ":" + str(now)
+            digest = HMAC.digest(HMAC.HMAC_KEY1, message.encode())
+            hmac_hex = "".join("%02x" % b for b in digest)
+            return {"mac": mac, "ts": now, "hmac": hmac_hex}
+        except Exception as e:
+            print("Device attestation unavailable: " + str(e))
+            return None
+
     def _start_relay_server(self):
         """Register a session with the config relay and generate its QR code."""
         wlan = network.WLAN(network.STA_IF)
@@ -161,7 +184,10 @@ class WebServerMixin:
             self.start_error = "No WiFi connection"
             return False
 
-        status, resp = _https_json_request(RELAY_HOST, RELAY_PORT, "POST", "/api/session")
+        status, resp = _https_json_request(
+            RELAY_HOST, RELAY_PORT, "POST", "/api/session",
+            payload=self._device_attestation(),
+        )
         if status != 201 or not resp or not resp.get("session_id"):
             if status is None:
                 self.start_error = "Can't reach " + RELAY_HOST + (": " + _last_relay_error if _last_relay_error else "")
@@ -173,7 +199,13 @@ class WebServerMixin:
         self.session_id = resp["session_id"]
         self.active_token = self.session_id
         self.display_host = RELAY_HOST
-        self.display_code = self.session_id
+        # code_a is short and safe to show large; the full session_id (128
+        # bits) is what's in the QR code/URL, but nobody's typing that in
+        # by hand. Manual access instead goes through the two-factor flow:
+        # code_a gets a browser to the badge, which then displays code_b
+        # (relay_confirm_code, set by _poll_relay_server) for the second step.
+        self.display_code = resp.get("code_a") or self.session_id
+        self.relay_confirm_code = ""
         self.server_url = RELAY_BASE_URL + "/" + self.session_id
 
         try:
@@ -201,10 +233,14 @@ class WebServerMixin:
             self._stop_web_server()
             return
 
-        if status != 200 or not resp or not resp.get("request"):
-            return  # 204 (nothing pending) or a transient network error - retry next cycle
+        if status != 200 or not resp:
+            return  # transient network error - retry next cycle
 
-        req = resp["request"]
+        self.relay_confirm_code = resp.get("confirm_code") or ""
+
+        req = resp.get("request")
+        if not req:
+            return  # nothing pending this cycle
         method = req.get("method", "GET")
         sub_path = req.get("path", "/")
         body_b64 = req.get("body_b64")
@@ -393,6 +429,7 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
         if self.session_id:
             _https_json_request(RELAY_HOST, RELAY_PORT, "DELETE", "/api/session/" + self.session_id)
             self.session_id = ""
+        self.relay_confirm_code = ""
         if self.server_socket:
             try:
                 self.server_socket.close()

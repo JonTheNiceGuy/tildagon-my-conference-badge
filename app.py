@@ -88,6 +88,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         self.server_backend = None  # "local" or "relay" while MODE_WEB_SERVER is active
         self.server_socket = None  # local backend only
         self.session_id = ""  # relay backend only
+        self.relay_confirm_code = ""  # relay backend only - "code B" of the 2FA manual-entry flow
         self.local_code = ""  # local backend only
         self.local_failed_attempts = 0
         self.active_token = ""  # whichever of the above is in use, for URL building
@@ -531,6 +532,10 @@ class ConferenceBadge(app.App, WebServerMixin):
 
     def _draw_web_server(self, ctx):
         """Draw web server screen with QR code."""
+        if self.server_backend == "relay" and self.relay_confirm_code:
+            self._draw_relay_confirm(ctx)
+            return
+
         ctx.rgb(255, 255, 255).rectangle(-120, -120, 240, 240).fill()
 
         qr_bottom = 60
@@ -570,6 +575,27 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.rgb(0, 0, 0)
         ctx.font_size = 14
         ctx.move_to(0, y + 18).text("F to stop server")
+
+    def _draw_relay_confirm(self, ctx):
+        """Draw the second-factor confirmation screen: someone entered code A
+        at the relay, so show code B for them to type back in. Takes over
+        from the normal QR screen while active since it's time-sensitive."""
+        ctx.rgb(0, 80, 0).rectangle(-120, -120, 240, 240).fill()
+        ctx.rgb(255, 255, 255)
+        ctx.font_size = 16
+        ctx.move_to(0, -60).text("Someone entered your code.")
+        ctx.move_to(0, -40).text("Give them this one:")
+
+        code_font, code_lines = self._fit_token_lines(ctx, self.relay_confirm_code, 0, max_lines=2)
+        ctx.font_size = code_font
+        y = 0
+        for line in code_lines:
+            ctx.move_to(0, y).text(line)
+            y += code_font + 4
+
+        ctx.font_size = 14
+        ctx.rgb(200, 255, 200)
+        ctx.move_to(0, y + 20).text("F to stop server")
 
     def _draw_wifi_error(self, ctx):
         """Draw the config-start error screen."""
