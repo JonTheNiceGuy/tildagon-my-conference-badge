@@ -499,19 +499,27 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 14
         ctx.move_to(0, 75).text("F to cancel")
 
-    def _fit_token_lines(self, ctx, text, y_position, max_lines=2):
+    # Extra, smaller tiers tried only when a caller passes a lower
+    # min_font_size - vertical space below the QR code is tight enough that
+    # a single small line usually beats wrapping to two readable ones.
+    FONT_SIZES_FINE = [56, 48, 40, 32, 24, 20, 18, 16]
+
+    def _fit_token_lines(self, ctx, text, y_position, max_lines=2, min_font_size=None):
         """Fit a single unbroken token (no spaces, e.g. an IP:port or a
         code) to the circular screen: shrink font first, then break
         mid-string if it still doesn't fit even at the smallest size."""
+        min_font_size = min_font_size or self.MIN_FONT_SIZE
         max_width = self.get_usable_width(y_position) * 0.9
         if max_width <= 0:
             max_width = 1
-        for font_size in self.FONT_SIZES:
+        for font_size in self.FONT_SIZES_FINE:
+            if font_size < min_font_size:
+                break
             ctx.font_size = font_size
             if ctx.text_width(text) <= max_width:
                 return font_size, [text]
 
-        ctx.font_size = self.MIN_FONT_SIZE
+        ctx.font_size = min_font_size
         lines = []
         remaining = text
         while remaining and len(lines) < max_lines - 1:
@@ -528,7 +536,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             # Last line gets everything left over, even if it overflows -
             # better visible-but-cramped than silently dropped.
             lines.append(remaining)
-        return self.MIN_FONT_SIZE, lines
+        return min_font_size, lines
 
     def _draw_web_server(self, ctx):
         """Draw web server screen with QR code."""
@@ -541,7 +549,10 @@ class ConferenceBadge(app.App, WebServerMixin):
         qr_bottom = 60
         if self.qr_matrix:
             qr_size = len(self.qr_matrix)
-            pixel_size = min(160 // qr_size, 5)
+            # Capped at 4px/module rather than 5 - frees up vertical room
+            # below for the host/code/footer lines, which is tight on this
+            # display (only ~2 lines' worth of room at the old QR size).
+            pixel_size = min(160 // qr_size, 4)
             total_size = qr_size * pixel_size
             offset_x = -total_size // 2
             offset_y = -total_size // 2 - 25
@@ -553,28 +564,31 @@ class ConferenceBadge(app.App, WebServerMixin):
                         y = offset_y + r * pixel_size
                         ctx.rgb(0, 0, 0).rectangle(x, y, pixel_size, pixel_size).fill()
 
-            qr_bottom = offset_y + total_size + 12 + 4
+            qr_bottom = offset_y + total_size + 12
 
         ctx.rgb(255, 0, 0)
         y = qr_bottom
 
-        host_font, host_lines = self._fit_token_lines(ctx, self.display_host or "", y)
+        # min_font_size=16 (below the class-wide MIN_FONT_SIZE of 24):
+        # a long IP:port fitting on one small line beats it wrapping to
+        # two readable ones and blowing the line budget below the QR.
+        host_font, host_lines = self._fit_token_lines(ctx, self.display_host or "", y, min_font_size=16)
         ctx.font_size = host_font
         for line in host_lines:
             ctx.move_to(0, y).text(line)
-            y += host_font + 2
+            y += host_font
 
         code_text = "code: " + (self.display_code or "")
-        code_font, code_lines = self._fit_token_lines(ctx, code_text, y + 2)
+        code_font, code_lines = self._fit_token_lines(ctx, code_text, y + 2, min_font_size=16)
         ctx.font_size = code_font
-        y += 4
+        y += 2
         for line in code_lines:
             y += code_font
             ctx.move_to(0, y).text(line)
 
         ctx.rgb(0, 0, 0)
-        ctx.font_size = 14
-        ctx.move_to(0, y + 18).text("F to stop server")
+        ctx.font_size = 12
+        ctx.move_to(0, y + 14).text("F to stop server")
 
     def _draw_relay_confirm(self, ctx):
         """Draw the second-factor confirmation screen: someone entered code A
