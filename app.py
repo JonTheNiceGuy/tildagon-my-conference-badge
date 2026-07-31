@@ -718,18 +718,39 @@ class ConferenceBadge(app.App, WebServerMixin):
                 fs, wrapped = self.fit_text(ctx, part, 40)
                 min_font = min(min_font, fs)
                 all_lines.extend(wrapped)
-            # Cap font size based on line count to prevent overflow into header
             num_lines = len(all_lines)
+            # Rough starting caps by line count - short individual parts
+            # (e.g. "Jon" / "Spriggs") each fit fine alone at a huge font,
+            # so this alone isn't enough; the loop below is what actually
+            # guarantees the block doesn't creep up into the header band,
+            # by checking real position rather than guessing at a cap.
             if num_lines == 2:
                 min_font = min(min_font, 48)
             elif num_lines >= 3:
                 min_font = min(min_font, 32)
+
+            header_bottom = -20  # bottom edge of the red header rectangle
+            top_margin = 6
+            bottom_limit = 105
+            while True:
+                line_height = min_font * 1.05
+                total_height = line_height * num_lines
+                center_y = 40
+                start_y = center_y - (total_height / 2) + (line_height / 2)
+                ascent = min_font * 0.75  # approximate glyph-top-above-baseline
+                first_line_top = start_y - ascent
+                last_line_y = start_y + (num_lines - 1) * line_height
+                if first_line_top >= header_bottom + top_margin and last_line_y <= bottom_limit:
+                    break
+                if min_font <= self.MIN_FONT_SIZE:
+                    # Can't shrink further without becoming unreadable -
+                    # push the block down instead, off-centre if it must be.
+                    start_y = max(start_y, header_bottom + top_margin + ascent)
+                    break
+                min_font -= 4
+
             ctx.font_size = min_font
             ctx.rgb(*vfg)
-            line_height = min_font * 1.05
-            total_height = line_height * num_lines
-            center_y = 40
-            start_y = center_y - (total_height / 2) + (line_height / 2)
             for i, line in enumerate(all_lines):
                 y = start_y + (i * line_height)
                 ctx.move_to(0, y).text(line)
