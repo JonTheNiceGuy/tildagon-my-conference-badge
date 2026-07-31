@@ -790,7 +790,7 @@ class ConferenceBadge(app.App, WebServerMixin):
                 min_font = min(min_font, 32)
 
             header_bottom = -20  # bottom edge of the red header rectangle
-            top_margin = 6
+            top_margin = 12  # room for the battery divider line sitting right on header_bottom
             bottom_limit = 105
             while True:
                 line_height = min_font * 1.05
@@ -820,7 +820,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             ctx.rgb(*vfg).move_to(0, 40).text("Not set")
             ctx.move_to(0, 65).text("Press D for settings")
 
-        self._draw_battery_line(ctx, 95, vfg)
+        self._draw_battery_line(ctx, -20, vfg)
 
         if total > 1:
             self._draw_page_indicator(ctx, ind_fg, ind_bg)
