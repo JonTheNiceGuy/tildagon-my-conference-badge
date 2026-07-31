@@ -60,6 +60,10 @@ class ConferenceBadge(app.App, WebServerMixin):
     SPLASH_DURATION_MS = 10000
     WIFI_ERROR_DURATION_MS = 2000
 
+    # power.BatteryLevel() does a real I2C read - re-sample it this often
+    # rather than on every render frame.
+    BATTERY_REFRESH_MS = 30000
+
     def __init__(self):
         super().__init__()
         self.button_states = Buttons(self)
@@ -98,6 +102,11 @@ class ConferenceBadge(app.App, WebServerMixin):
         self.qr_matrix = None
         self.ble_soon_flash_timer = 0
         self.start_error = ""
+
+        # Battery indicator state (badge pages only) - cached, see
+        # _get_battery_level and BATTERY_REFRESH_MS
+        self.battery_level = None
+        self.battery_checked_at = 0
 
         # Image state
         self.app_path = get_app_path()
@@ -229,7 +238,11 @@ class ConferenceBadge(app.App, WebServerMixin):
             delta = time.ticks_diff(cur_time, last_time)
             last_time = cur_time
 
-            if self.mode == self.MODE_WEB_SERVER:
+            if self.mode == self.MODE_WEB_SERVER and not self.button_states.get(BUTTON_TYPES["CANCEL"]):
+                # Skip starting another (possibly several-second, fully
+                # blocking) poll if cancel is already pressed - otherwise
+                # a press observed right here would still have to wait out
+                # one more full poll cycle before update() gets to act on it.
                 self._poll_server()
 
             self.update(delta)
@@ -507,18 +520,32 @@ class ConferenceBadge(app.App, WebServerMixin):
     def _fit_token_lines(self, ctx, text, y_position, max_lines=2, min_font_size=None):
         """Fit a single unbroken token (no spaces, e.g. an IP:port or a
         code) to the circular screen: shrink font first, then break
-        mid-string if it still doesn't fit even at the smallest size."""
+        mid-string if it still doesn't fit even at the smallest size.
+
+        Every caller draws with an increment-before-draw convention (see
+        _draw_web_server/_draw_relay_confirm): y_position is where the
+        baseline sits *before* this line's own font-height is added, so
+        the real drawn baseline ends up at y_position+font_size, not at
+        y_position itself. Checking width at y_position alone under-counts
+        how much the circle has already narrowed by the actual draw point
+        - e.g. "code: 76bf45" measuring a few px narrower than what's
+        really available a font-height further down. So the width check
+        has to use that same, larger y for each candidate font size.
+        """
         min_font_size = min_font_size or self.MIN_FONT_SIZE
-        max_width = self.get_usable_width(y_position) * 0.9
-        if max_width <= 0:
-            max_width = 1
         for font_size in self.FONT_SIZES_FINE:
             if font_size < min_font_size:
                 break
+            max_width = self.get_usable_width(y_position + font_size) * 0.9
+            if max_width <= 0:
+                continue
             ctx.font_size = font_size
             if ctx.text_width(text) <= max_width:
                 return font_size, [text]
 
+        max_width = self.get_usable_width(y_position + min_font_size) * 0.9
+        if max_width <= 0:
+            max_width = 1
         ctx.font_size = min_font_size
         lines = []
         remaining = text
@@ -648,6 +675,39 @@ class ConferenceBadge(app.App, WebServerMixin):
         vfg = colour_rgb(settings.get(field_key + "_vfg"), self.fg_color)
         return hbg, hfg, vbg, vfg
 
+    def _get_battery_level(self):
+        """Cached battery percentage (0-100), or None if unavailable.
+
+        power.BatteryLevel() does a real I2C read against the charger IC,
+        so this only re-samples it every BATTERY_REFRESH_MS rather than on
+        every render frame - the draw loop just reuses whatever was last
+        read to work out the bar's length.
+        """
+        now = time.ticks_ms()
+        if self.battery_level is None or time.ticks_diff(now, self.battery_checked_at) >= self.BATTERY_REFRESH_MS:
+            self.battery_checked_at = now
+            try:
+                import power
+                self.battery_level = max(0.0, min(100.0, power.BatteryLevel()))
+            except Exception as e:
+                _dbg("battery read failed:", e)
+                # Leave self.battery_level as whatever it was (None, or a
+                # still-reasonable stale reading) rather than erroring.
+        return self.battery_level
+
+    def _draw_battery_line(self, ctx, y, colour):
+        """1px battery indicator: a horizontal line centred on x=0 that
+        pulls in from both ends as charge drops, rather than a
+        conventional left-aligned bar."""
+        level = self._get_battery_level()
+        if level is None:
+            return
+        max_half_width = self.get_usable_width(y) * 0.4
+        half_width = max_half_width * (level / 100.0)
+        if half_width < 1:
+            return
+        ctx.rgb(*colour).rectangle(-half_width, y, half_width * 2, 1).fill()
+
     def _draw_badge_page(self, ctx):
         """Draw a normal badge page."""
         total = self._total_pages()
@@ -759,6 +819,8 @@ class ConferenceBadge(app.App, WebServerMixin):
             ctx.font = "Arimo Italic"
             ctx.rgb(*vfg).move_to(0, 40).text("Not set")
             ctx.move_to(0, 65).text("Press D for settings")
+
+        self._draw_battery_line(ctx, 95, vfg)
 
         if total > 1:
             self._draw_page_indicator(ctx, ind_fg, ind_bg)

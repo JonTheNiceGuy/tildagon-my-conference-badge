@@ -39,11 +39,15 @@ RELAY_BASE_URL = "https://" + RELAY_HOST
 # Socket timeout for register/respond/delete calls to the relay.
 RELAY_TIMEOUT = 8
 # Socket timeout for the long-poll GET. Must exceed the relay's own
-# POLL_TIMEOUT_SECONDS (server/relay/__init__.py, 5s by default) so the
+# POLL_TIMEOUT_SECONDS (server/relay/__init__.py, 2s by default) so the
 # badge doesn't time out its own socket right as the relay is about to
-# reply with a 204. This directly bounds how long the badge's render loop
-# stalls each idle poll cycle, so keep both values small.
-RELAY_POLL_SOCKET_TIMEOUT = 8
+# reply. MicroPython's blocking sockets freeze the whole interpreter for
+# the call's duration - including button event dispatch, which is *not*
+# a latch (see events.input.Buttons: a quick press+release entirely
+# inside that window is simply never recorded, not just delayed) - so
+# this directly bounds the size of the blind spot each poll cycle. Keep
+# both values as small as is reasonable network-chatter-wise.
+RELAY_POLL_SOCKET_TIMEOUT = 5
 
 
 def _generate_port():
