@@ -546,16 +546,24 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         ctx.rgb(255, 255, 255).rectangle(-120, -120, 240, 240).fill()
 
-        qr_bottom = 60
+        qr_bottom = 0
         if self.qr_matrix:
             qr_size = len(self.qr_matrix)
-            # Capped at 4px/module rather than 5 - frees up vertical room
-            # below for the host/code/footer lines, which is tight on this
-            # display (only ~2 lines' worth of room at the old QR size).
             pixel_size = min(160 // qr_size, 4)
             total_size = qr_size * pixel_size
             offset_x = -total_size // 2
-            offset_y = -total_size // 2 - 25
+
+            # Push the QR as far up as it can go: place its top edge so the
+            # top-left/top-right corners sit exactly on the display circle
+            # (x=+-total_size/2, solved for y on x^2+y^2=DISPLAY_RADIUS^2),
+            # instead of a fixed guessed offset. Maximises the QR's headroom
+            # and leaves the rest of the circle for text.
+            half = total_size / 2
+            if half < self.DISPLAY_RADIUS:
+                offset_y = -math.sqrt(self.DISPLAY_RADIUS ** 2 - half ** 2)
+            else:
+                offset_y = -self.DISPLAY_RADIUS
+            offset_y = int(offset_y)
 
             for r in range(qr_size):
                 for c in range(qr_size):
@@ -564,10 +572,15 @@ class ConferenceBadge(app.App, WebServerMixin):
                         y = offset_y + r * pixel_size
                         ctx.rgb(0, 0, 0).rectangle(x, y, pixel_size, pixel_size).fill()
 
-            qr_bottom = offset_y + total_size + 12
+            qr_bottom = offset_y + total_size
 
         ctx.rgb(255, 0, 0)
-        y = qr_bottom
+        y = qr_bottom + 2  # small border between the QR and the text below it;
+                            # text is baseline-anchored (glyphs extend upward
+                            # from y), so every line below advances y by its
+                            # own font size *before* drawing, not after -
+                            # otherwise the first line's glyphs render above
+                            # this point, back into the QR.
 
         # min_font_size=16 (below the class-wide MIN_FONT_SIZE of 24):
         # a long IP:port fitting on one small line beats it wrapping to
@@ -575,8 +588,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         host_font, host_lines = self._fit_token_lines(ctx, self.display_host or "", y, min_font_size=16)
         ctx.font_size = host_font
         for line in host_lines:
-            ctx.move_to(0, y).text(line)
             y += host_font
+            ctx.move_to(0, y).text(line)
 
         code_text = "code: " + (self.display_code or "")
         code_font, code_lines = self._fit_token_lines(ctx, code_text, y + 2, min_font_size=16)
@@ -588,7 +601,8 @@ class ConferenceBadge(app.App, WebServerMixin):
 
         ctx.rgb(0, 0, 0)
         ctx.font_size = 12
-        ctx.move_to(0, y + 14).text("F to stop server")
+        y += 14
+        ctx.move_to(0, y).text("F to stop server")
 
     def _draw_relay_confirm(self, ctx):
         """Draw the second-factor confirmation screen: someone entered code A
@@ -604,8 +618,9 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = code_font
         y = 0
         for line in code_lines:
+            y += code_font
             ctx.move_to(0, y).text(line)
-            y += code_font + 4
+            y += 4
 
         ctx.font_size = 14
         ctx.rgb(200, 255, 200)
