@@ -489,13 +489,13 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.move_to(0, 5).text("B: Relay (Internet)")
 
         if self.ble_soon_flash_timer > 0:
-            ctx.rgb(255, 200, 0)
+            ctx.rgb(1.0, 0.78, 0.0)
             ctx.move_to(0, 35).text("C: BLE - coming soon!")
         else:
-            ctx.rgb(120, 120, 120)
+            ctx.rgb(0.47, 0.47, 0.47)
             ctx.move_to(0, 35).text("C: BLE (not yet)")
 
-        ctx.rgb(150, 150, 150)
+        ctx.rgb(0.59, 0.59, 0.59)
         ctx.font_size = 14
         ctx.move_to(0, 75).text("F to cancel")
 
@@ -608,8 +608,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         """Draw the second-factor confirmation screen: someone entered code A
         at the relay, so show code B for them to type back in. Takes over
         from the normal QR screen while active since it's time-sensitive."""
-        ctx.rgb(0, 80, 0).rectangle(-120, -120, 240, 240).fill()
-        ctx.rgb(255, 255, 255)
+        ctx.rgb(0.0, 0.15, 0.45).rectangle(-120, -120, 240, 240).fill()
+        ctx.rgb(1.0, 1.0, 1.0)
         ctx.font_size = 16
         ctx.move_to(0, -60).text("Someone entered your code.")
         ctx.move_to(0, -40).text("Give them this one:")
@@ -623,7 +623,7 @@ class ConferenceBadge(app.App, WebServerMixin):
             y += 4
 
         ctx.font_size = 14
-        ctx.rgb(200, 255, 200)
+        ctx.rgb(0.7, 0.85, 1.0)
         ctx.move_to(0, y + 20).text("F to stop server")
 
     def _draw_wifi_error(self, ctx):
@@ -800,16 +800,27 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.move_to(0, 50).text("(" + remaining_str + ")")
 
     def _draw_config_confirm(self, ctx):
-        ctx.rgb(0, 0, 100).rectangle(-120, -120, 240, 240).fill()
-        ctx.rgb(255, 255, 255)
-        ctx.font_size = 28
-        ctx.move_to(0, -40).text("Enter Config Mode?")
-        ctx.font_size = 24
-        ctx.move_to(0, 10).text("E: confirm | F: cancel")
+        ctx.rgb(0.0, 0.0, 0.39).rectangle(-120, -120, 240, 240).fill()
+        ctx.rgb(1.0, 1.0, 1.0)
+
+        y = -40
+        title_font, title_lines = self.fit_text(ctx, "Enter Config Mode?", y)
+        ctx.font_size = title_font
+        for line in title_lines:
+            ctx.move_to(0, y).text(line)
+            y += title_font + 4
+
+        y += 20
+        prompt_font, prompt_lines = self.fit_text(ctx, "E: confirm | F: cancel", y)
+        ctx.font_size = prompt_font
+        for line in prompt_lines:
+            ctx.move_to(0, y).text(line)
+            y += prompt_font + 4
+
         remaining = (self.CONFIG_CONFIRM_TIMEOUT_MS - self.config_confirm_timer) / 1000
         ctx.font_size = 20
         remaining_str = str(int(remaining) + 1) + "s"
-        ctx.move_to(0, 50).text("(" + remaining_str + ")")
+        ctx.move_to(0, y + 20).text("(" + remaining_str + ")")
 
     def _draw_ice_screen(self, ctx):
         ctx.rgb(*self.ice_bg_color).rectangle(-120, -120, 240, 240).fill()
