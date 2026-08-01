@@ -119,6 +119,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         self._dev_tap_count = 0
         self._dev_tap_last_ms = 0
         self._dev_up_was_down = False
+        self._dev_redeploying = False
 
         # Image state
         self.app_path = get_app_path()
@@ -295,7 +296,17 @@ class ConferenceBadge(app.App, WebServerMixin):
         """Tap A (UP) DEV_TAP_COUNT times quickly: pull the latest app
         code from GitHub and reboot. Edge-triggered (only counts the
         press, not every frame it's held) via _dev_up_was_down.
+
+        The actual fetch is deferred to the *next* update() cycle after
+        the 4th tap, rather than run immediately here - _dev_redeploying
+        gets one full draw() first (see draw()'s early branch), so there's
+        an on-screen "please wait" cue before the blocking network call
+        freezes rendering, instead of the badge just appearing to hang.
         """
+        if self._dev_redeploying:
+            self._trigger_dev_redeploy()
+            return
+
         up_down = self.button_states.get(BUTTON_TYPES["UP"])
         if up_down and not self._dev_up_was_down:
             now = time.ticks_ms()
@@ -303,16 +314,19 @@ class ConferenceBadge(app.App, WebServerMixin):
                 self._dev_tap_count = 0
             self._dev_tap_count += 1
             self._dev_tap_last_ms = now
+            print("Dev shortcut: tap " + str(self._dev_tap_count) + "/" + str(self.DEV_TAP_COUNT))
             if self._dev_tap_count >= self.DEV_TAP_COUNT:
                 self._dev_tap_count = 0
-                self._trigger_dev_redeploy()
+                self._dev_redeploying = True
         self._dev_up_was_down = up_down
 
     def _trigger_dev_redeploy(self):
         """Pull the latest app code from GitHub and reboot. Blocking (this
         is a one-shot developer action, not something in a per-frame
         loop) - the screen will appear to freeze for a few seconds while
-        it downloads, then the badge resets.
+        it downloads, then the badge resets. On failure, falls back to
+        the existing WiFi-error screen (with the real exception message)
+        instead of failing silently to a console you might not have open.
         """
         print("Dev shortcut: redeploying from " + self.DEV_DEPLOY_URL)
         try:
@@ -320,6 +334,10 @@ class ConferenceBadge(app.App, WebServerMixin):
             exec(requests.get(self.DEV_DEPLOY_URL).text)
         except Exception as e:
             print("Dev redeploy failed: " + str(e))
+            self._dev_redeploying = False
+            self.start_error = "Redeploy failed: " + str(e)
+            self.mode = self.MODE_WIFI_ERROR
+            self.wifi_error_timer = 0
             return
         import machine
         machine.reset()
@@ -491,7 +509,9 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.text_align = ctx.CENTER
         ctx.font = "Arimo Bold"
 
-        if self.mode == self.MODE_SPLASH:
+        if self._dev_redeploying:
+            self._draw_dev_redeploying(ctx)
+        elif self.mode == self.MODE_SPLASH:
             self._draw_splash(ctx)
         elif self.mode == self.MODE_WEB_PROMPT:
             self._draw_web_prompt(ctx)
@@ -511,6 +531,17 @@ class ConferenceBadge(app.App, WebServerMixin):
             self._draw_badge_page(ctx)
 
         self.draw_overlays(ctx)
+
+    def _draw_dev_redeploying(self, ctx):
+        """Shown for one frame before the blocking redeploy fetch starts,
+        so the dev-shortcut doesn't just look like the badge hung."""
+        ctx.rgb(0.0, 0.0, 0.0).rectangle(-120, -120, 240, 240).fill()
+        ctx.rgb(1.0, 1.0, 1.0)
+        ctx.font_size = 20
+        ctx.move_to(0, -10).text("Redeploying...")
+        ctx.font_size = 14
+        ctx.rgb(0.7, 0.7, 0.7)
+        ctx.move_to(0, 20).text("Please wait")
 
     def _draw_splash(self, ctx):
         """Draw splash screen with button instructions."""
@@ -767,18 +798,6 @@ class ConferenceBadge(app.App, WebServerMixin):
             return
         ctx.rgb(*colour).rectangle(-half_width, y, half_width * 2, 1).fill()
 
-    def _get_representative_battery_colour(self):
-        """Battery-line colour to use on screens with no specific display
-        field of their own (e.g. ICE) - the first configured field's
-        resolved battery colour (override, or its header colour), or
-        white if nothing's configured."""
-        for field_key in self.display_fields:
-            if field_key in (IMAGE_FIELD, EVENT_LOGO_FIELD):
-                continue
-            hfg = colour_rgb(settings.get(field_key + "_hfg"), self.header_fg_color)
-            return colour_rgb(settings.get(field_key + "_batt_fg"), hfg)
-        return self.fg_color
-
     def _draw_edge_arc(self, ctx, start_degrees, end_degrees, colour, line_width=2, radius=119):
         """Stroke an arc on the display's edge. 0deg is the top of the
         screen (12 o'clock, button A) and degrees increase clockwise
@@ -919,12 +938,17 @@ class ConferenceBadge(app.App, WebServerMixin):
             ctx.rgb(*vfg).move_to(0, 40).text("Not set")
             ctx.move_to(0, 65).text("Press D for settings")
 
+        # Defaults to the header block's own foreground colour (hfg - white
+        # unless that field's header colour was customised); field_key +
+        # "_batt_fg" is an explicit per-field override. Used for both the
+        # battery line and the ICE-configured indicator arc below.
+        batt_fg = colour_rgb(settings.get(field_key + "_batt_fg"), hfg)
+
         if self.battery_enabled:
-            # Defaults to the header block's own foreground colour (hfg -
-            # white unless that field's header colour was customised);
-            # field_key + "_batt_fg" is an explicit per-field override.
-            batt_fg = colour_rgb(settings.get(field_key + "_batt_fg"), hfg)
             self._draw_battery_line(ctx, -20, batt_fg)
+
+        if self._has_ice_configured():
+            self._draw_edge_arc(ctx, 52.5, 67.5, batt_fg)
 
         if total > 1:
             self._draw_page_indicator(ctx, ind_fg, ind_bg)
@@ -985,7 +1009,6 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 20
         remaining_str = str(int(remaining) + 1) + "s"
         ctx.move_to(0, 50).text("(" + remaining_str + ")")
-        self._draw_edge_arc(ctx, 52.5, 67.5, self._get_representative_battery_colour())
 
     def _draw_config_confirm(self, ctx):
         ctx.rgb(0.0, 0.0, 0.39).rectangle(-120, -120, 240, 240).fill()
@@ -1014,8 +1037,6 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.rgb(*self.ice_bg_color).rectangle(-120, -120, 240, 240).fill()
         ctx.font_size = 32
         ctx.rgb(*self.ice_fg_color).move_to(0, -80).text("ICE")
-        if self._has_ice_configured():
-            self._draw_edge_arc(ctx, 52.5, 67.5, self._get_representative_battery_colour())
 
         if self.ice_screen == 1:
             ctx.font_size = 20
