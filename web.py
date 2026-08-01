@@ -34,20 +34,38 @@ try:
 except ImportError:
     from qr import encode as qr_encode
 
+try:
+    # First-party OS helper: runs a blocking call on a background thread
+    # (_thread) while a periodic async callback keeps running on the main
+    # thread, so we're not frozen for the call's duration. Falls back to
+    # plain synchronous calls (the old behaviour) if unavailable.
+    from async_helpers import unblock
+    THREADING_AVAILABLE = True
+except ImportError:
+    unblock = None
+    THREADING_AVAILABLE = False
+
 RELAY_HOST = "mcb.g7vri.me"
 RELAY_PORT = 443
 RELAY_BASE_URL = "https://" + RELAY_HOST
-# Socket timeout for register/respond/delete calls to the relay.
+# Socket timeout for register/respond/delete calls to the relay. These
+# still run as plain blocking calls on the main thread (they're one-shot,
+# not in the repeated poll loop), so a slow one briefly freezes rendering -
+# acceptable for a single register/stop action, unlike the poll cycle.
 RELAY_TIMEOUT = 8
 # Socket timeout for the long-poll GET. Must exceed the relay's own
 # POLL_TIMEOUT_SECONDS (server/relay/__init__.py, 2s by default) so the
 # badge doesn't time out its own socket right as the relay is about to
-# reply. MicroPython's blocking sockets freeze the whole interpreter for
-# the call's duration - including button event dispatch, which is *not*
-# a latch (see events.input.Buttons: a quick press+release entirely
-# inside that window is simply never recorded, not just delayed) - so
-# this directly bounds the size of the blind spot each poll cycle. Keep
-# both values as small as is reasonable network-chatter-wise.
+# reply. When THREADING_AVAILABLE, _poll_relay_server runs this on a
+# background thread (see async_helpers.unblock) so it no longer freezes
+# rendering/button handling at all; this timeout is really just "how long
+# before we give up and retry" in that case. Without threading, it falls
+# back to a plain blocking call - MicroPython's blocking sockets freeze the
+# whole interpreter for the call's duration, including button event
+# dispatch, which is *not* a latch (see events.input.Buttons: a quick
+# press+release entirely inside that window is simply never recorded, not
+# just delayed) - so in that fallback path, this value directly bounds the
+# size of that blind spot each poll cycle.
 RELAY_POLL_SOCKET_TIMEOUT = 5
 
 
@@ -223,13 +241,37 @@ class WebServerMixin:
         print("Badge config server (relay): " + self.server_url)
         return True
 
-    def _poll_relay_server(self):
-        """Long-poll the relay for a pending browser request and answer it."""
-        status, resp = _https_json_request(
+    async def _poll_relay_server(self, render_update):
+        """Long-poll the relay for a pending browser request and answer it.
+
+        The actual network calls run on a background thread (via
+        async_helpers.unblock) whenever that's available, with a periodic
+        callback pumping update()/render_update() on the main thread every
+        ~0.1s while we wait - so the badge stays responsive (button
+        presses, screen updates) instead of freezing for the call's
+        duration. Falls back to a plain blocking call otherwise.
+
+        Settings mutation (_dispatch_request, which saves form data) only
+        ever happens here, on the main thread, after the network call
+        returns - never inside the background thread itself.
+        """
+        session_id = self.session_id  # snapshot: may change under us (e.g. cancel) while threaded out
+
+        async def tick():
+            await self._render_tick(render_update)
+
+        poll_args = (
             RELAY_HOST, RELAY_PORT, "GET",
-            "/api/session/" + self.session_id + "/poll",
-            timeout=RELAY_POLL_SOCKET_TIMEOUT,
+            "/api/session/" + session_id + "/poll",
         )
+        poll_kwargs = {"timeout": RELAY_POLL_SOCKET_TIMEOUT}
+        if THREADING_AVAILABLE:
+            status, resp = await unblock(_https_json_request, tick, *poll_args, **poll_kwargs)
+        else:
+            status, resp = _https_json_request(*poll_args, **poll_kwargs)
+
+        if self.session_id != session_id:
+            return  # session was torn down (e.g. cancel) while we were waiting
 
         if status == 404:
             # The relay dropped this session (expired or was never valid) -
@@ -257,11 +299,14 @@ class WebServerMixin:
             "content_type": content_type,
             "body_b64": b64encode(resp_body),
         }
-        _https_json_request(
+        respond_args = (
             RELAY_HOST, RELAY_PORT, "POST",
-            "/api/session/" + self.session_id + "/respond/" + req["request_id"],
-            payload=reply,
+            "/api/session/" + session_id + "/respond/" + req["request_id"],
         )
+        if THREADING_AVAILABLE:
+            await unblock(_https_json_request, tick, *respond_args, payload=reply)
+        else:
+            _https_json_request(*respond_args, payload=reply)
 
     # --- Local network backend ---
 
@@ -447,12 +492,12 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
         self.qr_matrix = None
         self._load_settings()
 
-    def _poll_server(self):
+    async def _poll_server(self, render_update):
         """Poll whichever backend is currently running."""
         if self.server_backend == "relay":
-            self._poll_relay_server()
+            await self._poll_relay_server(render_update)
         elif self.server_backend == "local":
-            self._poll_local_server()
+            self._poll_local_server()  # already non-blocking, no thread needed
 
     def _dispatch_request(self, method, sub_path, body_bytes):
         """Route a parsed request to the right handler, regardless of which

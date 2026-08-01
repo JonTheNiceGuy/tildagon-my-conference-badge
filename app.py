@@ -236,21 +236,30 @@ class ConferenceBadge(app.App, WebServerMixin):
     # --- Main Loop ---
 
     async def run(self, render_update):
-        last_time = time.ticks_ms()
+        self._last_tick_time = time.ticks_ms()
         while True:
-            cur_time = time.ticks_ms()
-            delta = time.ticks_diff(cur_time, last_time)
-            last_time = cur_time
-
             if self.mode == self.MODE_WEB_SERVER and not self.button_states.get(BUTTON_TYPES["CANCEL"]):
-                # Skip starting another (possibly several-second, fully
-                # blocking) poll if cancel is already pressed - otherwise
-                # a press observed right here would still have to wait out
-                # one more full poll cycle before update() gets to act on it.
-                self._poll_server()
+                # Skip starting another poll if cancel is already pressed -
+                # otherwise a press observed right here would still have to
+                # wait out one more full poll cycle before update() gets to
+                # act on it. _poll_server() itself keeps rendering/checking
+                # buttons via _render_tick while any network call it makes
+                # is in flight (see web.py) - it isn't a blocking pause.
+                await self._poll_server(render_update)
 
-            self.update(delta)
-            await render_update()
+            await self._render_tick(render_update)
+
+    async def _render_tick(self, render_update):
+        """One frame: advance timers/state and render. Called once per
+        run() loop iteration, and also (repeatedly, ~every 0.1s) as the
+        periodic callback while a relay network call runs on a background
+        thread, so the badge doesn't visibly freeze while waiting on it.
+        """
+        cur_time = time.ticks_ms()
+        delta = time.ticks_diff(cur_time, self._last_tick_time)
+        self._last_tick_time = cur_time
+        self.update(delta)
+        await render_update()
 
     def update(self, delta):
         if self._settings_dirty:
