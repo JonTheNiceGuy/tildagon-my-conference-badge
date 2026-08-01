@@ -11,7 +11,7 @@ from events.input import BUTTON_TYPES, Buttons
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_HAS_STARTED,
-    KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
+    KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES, KEY_BATTERY_ENABLED,
     IMAGE_FILENAME, IMAGE_FIELD, EVENT_LOGO_FIELD,
     KEY_EVENT_LOGO, EVENT_IMAGES_DIR, get_event_logos, default_event_logo,
     colour_rgb, display_name, verb_key, get_app_path,
@@ -138,6 +138,10 @@ class ConferenceBadge(app.App, WebServerMixin):
         self.ice_phone = settings.get(KEY_ICE_PHONE)
         self.ice_name = settings.get(KEY_ICE_NAME)
         self.ice_notes = settings.get(KEY_ICE_NOTES)
+
+        # Battery indicator defaults to on; stored as 0 when explicitly
+        # disabled via the web UI, absent/truthy otherwise.
+        self.battery_enabled = settings.get(KEY_BATTERY_ENABLED) != 0
 
         # Load selected event logo
         event_logos = get_event_logos(self.app_path)
@@ -820,7 +824,12 @@ class ConferenceBadge(app.App, WebServerMixin):
             ctx.rgb(*vfg).move_to(0, 40).text("Not set")
             ctx.move_to(0, 65).text("Press D for settings")
 
-        self._draw_battery_line(ctx, -20, vfg)
+        if self.battery_enabled:
+            # Defaults to the header block's own foreground colour (hfg -
+            # white unless that field's header colour was customised);
+            # field_key + "_batt_fg" is an explicit per-field override.
+            batt_fg = colour_rgb(settings.get(field_key + "_batt_fg"), hfg)
+            self._draw_battery_line(ctx, -20, batt_fg)
 
         if total > 1:
             self._draw_page_indicator(ctx, ind_fg, ind_bg)

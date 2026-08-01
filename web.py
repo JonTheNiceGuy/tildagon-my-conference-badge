@@ -21,6 +21,7 @@ except ImportError:
 
 from .helpers import (
     KEY_DISPLAY_FIELDS, KEY_NAME, KEY_ICE_PHONE, KEY_ICE_NAME, KEY_ICE_NOTES,
+    KEY_BATTERY_ENABLED,
     IMAGE_FIELD, EVENT_LOGO_FIELD, KEY_EVENT_LOGO, get_event_logos,
     default_event_logo,
     COLOUR_NAMES, COLOUR_GROUPS, INDICATOR_DEFAULTS,
@@ -643,10 +644,18 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
                         if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
+                    # Battery line override - empty means "inherit hfg"
+                    batt_key = "batt_fg_" + field
+                    if batt_key in data and (data[batt_key] == "" or data[batt_key] in COLOUR_NAMES):
+                        settings.set(field + "_batt_fg", data[batt_key])
+
                 # Save ICE settings
                 settings.set(KEY_ICE_PHONE, data.get("ice_phone", ""))
                 settings.set(KEY_ICE_NAME, data.get("ice_name", ""))
                 settings.set(KEY_ICE_NOTES, data.get("ice_notes", ""))
+
+                # Battery indicator on/off - absent from form data means unchecked
+                settings.set(KEY_BATTERY_ENABLED, 1 if "battery_enabled" in data else 0)
 
                 message = "All settings saved!"
 
@@ -704,9 +713,15 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
                         if form_key in data and data[form_key] in COLOUR_NAMES:
                             settings.set(field + "_" + suffix, data[form_key])
 
+                    batt_key = "batt_fg_" + field
+                    if batt_key in data and (data[batt_key] == "" or data[batt_key] in COLOUR_NAMES):
+                        settings.set(field + "_batt_fg", data[batt_key])
+
                 settings.set(KEY_ICE_PHONE, data.get("ice_phone", ""))
                 settings.set(KEY_ICE_NAME, data.get("ice_name", ""))
                 settings.set(KEY_ICE_NOTES, data.get("ice_notes", ""))
+
+                settings.set(KEY_BATTERY_ENABLED, 1 if "battery_enabled" in data else 0)
 
                 self._persist_settings()
                 self._load_settings()
@@ -751,6 +766,12 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
             ind_fg = settings.get(field + "_ind_fg") or INDICATOR_DEFAULTS["foreground"]
             ind_bg = settings.get(field + "_ind_bg") or INDICATOR_DEFAULTS["background"]
 
+            # Battery line colour: empty means "inherit the header colour"
+            # (batt_fg_raw is what's actually stored/submitted; the swatch
+            # itself previews the effective colour, which is hfg when unset).
+            batt_fg_raw = settings.get(field + "_batt_fg") or ""
+            batt_fg_display = batt_fg_raw or hfg
+
             field_rows += '''
             <tr>
                 <td colspan="2">
@@ -776,6 +797,8 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
                     <span class="clabel">Indicator:</span>
                     <span class="cbox" id="box_ind_bg_''' + esc_field + '''" style="background:''' + ind_bg + '''" onclick="openPicker('ind_bg_''' + esc_field + '''')">B</span>
                     <span class="cbox" id="box_ind_fg_''' + esc_field + '''" style="background:''' + ind_fg + '''" onclick="openPicker('ind_fg_''' + esc_field + '''')">F</span>
+                    <span class="clabel">Batt:</span>
+                    <span class="cbox" id="box_batt_fg_''' + esc_field + '''" style="background:''' + batt_fg_display + '''" onclick="openPicker('batt_fg_''' + esc_field + '''')">F</span>
                     <button type="button" class="reset-btn" onclick="resetColors('''' + esc_field + '''')">Reset</button>
                     <input type="hidden" name="hbg_''' + esc_field + '''" id="hbg_''' + esc_field + '''" value="''' + hbg + '''">
                     <input type="hidden" name="hfg_''' + esc_field + '''" id="hfg_''' + esc_field + '''" value="''' + hfg + '''">
@@ -783,12 +806,15 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
                     <input type="hidden" name="vfg_''' + esc_field + '''" id="vfg_''' + esc_field + '''" value="''' + vfg + '''">
                     <input type="hidden" name="ind_fg_''' + esc_field + '''" id="ind_fg_''' + esc_field + '''" value="''' + ind_fg + '''">
                     <input type="hidden" name="ind_bg_''' + esc_field + '''" id="ind_bg_''' + esc_field + '''" value="''' + ind_bg + '''">
+                    <input type="hidden" name="batt_fg_''' + esc_field + '''" id="batt_fg_''' + esc_field + '''" value="''' + batt_fg_raw + '''">
+                    <p style="font-size:11px;color:#888;margin:4px 0 0;">Battery line defaults to the header colour above - Reset also clears this override.</p>
                 </td>
             </tr>'''
 
         ice_phone = html_esc(settings.get(KEY_ICE_PHONE) or "")
         ice_name = html_esc(settings.get(KEY_ICE_NAME) or "")
         ice_notes = html_esc(settings.get(KEY_ICE_NOTES) or "")
+        battery_checked = "" if settings.get(KEY_BATTERY_ENABLED) == 0 else "checked"
 
         # Reorder section
         reorder_html = ""
@@ -902,6 +928,15 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
                 <tr><th>Screen shows</th></tr>
                 ''' + field_rows + '''
             </table>
+        </div>
+
+        <div class="section">
+            <h2>Battery Indicator</h2>
+            <label style="display:flex;align-items:center;gap:8px;font-size:15px;">
+                <input type="checkbox" name="battery_enabled" value="1" ''' + battery_checked + '''
+                    style="width:20px;height:20px;">
+                Show battery line between the header and value
+            </label>
         </div>
 
         <div class="section">
@@ -1081,6 +1116,8 @@ button { font-size: 20px; padding: 12px 20px; margin-left: 8px; background: #4CA
         setColor('vfg_'+field,'white');
         setColor('ind_fg_'+field,'lightgray');
         setColor('ind_bg_'+field,'darkgray');
+        document.getElementById('batt_fg_'+field).value='';
+        document.getElementById('box_batt_fg_'+field).style.background='white';
         saveForm();
     }
     function setColor(id,c){

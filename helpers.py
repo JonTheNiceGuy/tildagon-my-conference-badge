@@ -14,6 +14,7 @@ KEY_HAS_STARTED = PREFIX + "has_started"
 KEY_ICE_PHONE = PREFIX + "ice_phone"
 KEY_ICE_NAME = PREFIX + "ice_name"
 KEY_ICE_NOTES = PREFIX + "ice_notes"
+KEY_BATTERY_ENABLED = PREFIX + "battery_enabled"
 
 # Image constants
 IMAGE_FILENAME = "badge_image.jpg"
