@@ -47,7 +47,7 @@ class ConferenceBadge(app.App, WebServerMixin):
     header_bg_color = (1.0, 0.0, 0.0)
     header_fg_color = (1.0, 1.0, 1.0)
     ice_bg_color = (1.0, 0.0, 0.0)
-    ice_fg_color = (0.0, 0.0, 0.0)
+    ice_fg_color = (1.0, 1.0, 1.0)  # was black on red - poor contrast in the field
 
     # App modes
     MODE_SPLASH = 0
@@ -721,6 +721,45 @@ class ConferenceBadge(app.App, WebServerMixin):
             return
         ctx.rgb(*colour).rectangle(-half_width, y, half_width * 2, 1).fill()
 
+    def _get_representative_battery_colour(self):
+        """Battery-line colour to use on screens with no specific display
+        field of their own (e.g. ICE) - the first configured field's
+        resolved battery colour (override, or its header colour), or
+        white if nothing's configured."""
+        for field_key in self.display_fields:
+            if field_key in (IMAGE_FIELD, EVENT_LOGO_FIELD):
+                continue
+            hfg = colour_rgb(settings.get(field_key + "_hfg"), self.header_fg_color)
+            return colour_rgb(settings.get(field_key + "_batt_fg"), hfg)
+        return self.fg_color
+
+    def _draw_edge_arc(self, ctx, start_percent, end_percent, colour, line_width=2, radius=119):
+        """Stroke an arc on the display's edge. 0% is the top of the
+        screen (12 o'clock) and percentages increase clockwise - e.g.
+        25%=3 o'clock, 50%=6 o'clock/bottom, 75%=9 o'clock - matching a
+        clock face read from the top.
+        """
+        start_angle = math.radians((270 + start_percent * 3.6) % 360)
+        end_angle = math.radians((270 + end_percent * 3.6) % 360)
+        sweep = end_angle - start_angle
+        if sweep < 0:
+            sweep += 2 * math.pi
+
+        ctx.rgb(*colour)
+        ctx.line_width = line_width
+        points = 30
+        prev_x, prev_y = None, None
+        for p in range(points + 1):
+            t = p / points
+            angle = start_angle + t * sweep
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            if prev_x is not None:
+                ctx.move_to(prev_x, prev_y)
+                ctx.line_to(x, y)
+                ctx.stroke()
+            prev_x, prev_y = x, y
+
     def _draw_badge_page(self, ctx):
         """Draw a normal badge page."""
         total = self._total_pages()
@@ -899,6 +938,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 20
         remaining_str = str(int(remaining) + 1) + "s"
         ctx.move_to(0, 50).text("(" + remaining_str + ")")
+        self._draw_edge_arc(ctx, 35, 55, self._get_representative_battery_colour())
 
     def _draw_config_confirm(self, ctx):
         ctx.rgb(0.0, 0.0, 0.39).rectangle(-120, -120, 240, 240).fill()
@@ -927,6 +967,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.rgb(*self.ice_bg_color).rectangle(-120, -120, 240, 240).fill()
         ctx.font_size = 32
         ctx.rgb(*self.ice_fg_color).move_to(0, -80).text("ICE")
+        if self._has_ice_configured():
+            self._draw_edge_arc(ctx, 35, 55, self._get_representative_battery_colour())
 
         if self.ice_screen == 1:
             ctx.font_size = 20
