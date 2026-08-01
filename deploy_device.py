@@ -11,7 +11,7 @@ Replace <branch> with whichever branch you want to pull.
 import os
 import requests
 
-BASE = "https://raw.githubusercontent.com/JonTheNiceGuy/tildagon-my-conference-badge/relay-config"
+BASE = "https://raw.githubusercontent.com/JonTheNiceGuy/tildagon-my-conference-badge/next"
 APP_DIR = "/apps/badgeapp"
 FILES = [
     "__init__.py", "app.py", "helpers.py", "page_indicator.py", "qr.py",

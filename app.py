@@ -69,7 +69,7 @@ class ConferenceBadge(app.App, WebServerMixin):
     # reboot - avoids needing REPL/serial access to redeploy while testing.
     DEV_TAP_COUNT = 4
     DEV_TAP_WINDOW_MS = 800
-    DEV_DEPLOY_URL = "https://raw.githubusercontent.com/JonTheNiceGuy/tildagon-my-conference-badge/relay-config/deploy_device.py"
+    DEV_DEPLOY_URL = "https://raw.githubusercontent.com/JonTheNiceGuy/tildagon-my-conference-badge/next/deploy_device.py"
     # Half-width (degrees) of the feedback arc shown after tap 1, 2, 3 -
     # centred on button A/top (11:45-12:15, 11:30-12:30, 11:15-12:45), so
     # each registered press is immediately visible without waiting for
