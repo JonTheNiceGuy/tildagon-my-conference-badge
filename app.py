@@ -70,6 +70,11 @@ class ConferenceBadge(app.App, WebServerMixin):
     DEV_TAP_COUNT = 4
     DEV_TAP_WINDOW_MS = 800
     DEV_DEPLOY_URL = "https://raw.githubusercontent.com/JonTheNiceGuy/tildagon-my-conference-badge/relay-config/deploy_device.py"
+    # Half-width (degrees) of the feedback arc shown after tap 1, 2, 3 -
+    # centred on button A/top (11:45-12:15, 11:30-12:30, 11:15-12:45), so
+    # each registered press is immediately visible without waiting for
+    # the 4th to find out whether presses are being detected at all.
+    DEV_TAP_ARC_HALF_WIDTHS_DEG = [7.5, 15, 22.5]
 
     def __init__(self):
         super().__init__()
@@ -275,6 +280,8 @@ class ConferenceBadge(app.App, WebServerMixin):
         await render_update()
 
     def update(self, delta):
+        self._update_dev_shortcut()
+
         if self._settings_dirty:
             self._settings_dirty = False
             self._load_settings()
@@ -344,7 +351,6 @@ class ConferenceBadge(app.App, WebServerMixin):
 
     def _update_badge(self, delta):
         """Update badge display mode."""
-        self._update_dev_shortcut()
         self.page_timer += delta
         if self.ice_confirm_mode:
             self.ice_confirm_timer += delta
@@ -530,7 +536,18 @@ class ConferenceBadge(app.App, WebServerMixin):
         else:
             self._draw_badge_page(ctx)
 
+        self._draw_dev_tap_feedback(ctx)
         self.draw_overlays(ctx)
+
+    def _draw_dev_tap_feedback(self, ctx):
+        """Overlay a small arc near button A/top after each registered
+        tap of the dev-redeploy sequence, widening toward the 4th -
+        direct visual proof presses are being detected, regardless of
+        whatever else is on screen."""
+        if not (1 <= self._dev_tap_count <= len(self.DEV_TAP_ARC_HALF_WIDTHS_DEG)):
+            return
+        half = self.DEV_TAP_ARC_HALF_WIDTHS_DEG[self._dev_tap_count - 1]
+        self._draw_edge_arc(ctx, -half, half, (1.0, 0.9, 0.0), line_width=4)
 
     def _draw_dev_redeploying(self, ctx):
         """Shown for one frame before the blocking redeploy fetch starts,
