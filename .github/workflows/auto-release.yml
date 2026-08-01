@@ -46,8 +46,9 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Already released, skipping."
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
@@ -58,8 +59,8 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          NOTES: ${{ steps.meta.outputs.desc }}
+          TARGET: ${{ github.sha }}
         run: |
-          gh release create "${{ steps.meta.outputs.tag }}" \
-            --title "${{ steps.meta.outputs.tag }}" \
-            --notes "${{ steps.meta.outputs.desc }}" \
-            --target "${{ github.sha }}"
+          gh release create "$TAG" --title "$TAG" --notes "$NOTES" --target "$TARGET"
