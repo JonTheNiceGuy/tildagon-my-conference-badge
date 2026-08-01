@@ -939,7 +939,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 20
         remaining_str = str(int(remaining) + 1) + "s"
         ctx.move_to(0, 50).text("(" + remaining_str + ")")
-        self._draw_edge_arc(ctx, 35, 55, self._get_representative_battery_colour())
+        self._draw_edge_arc(ctx, 52.5, 67.5, self._get_representative_battery_colour())
 
     def _draw_config_confirm(self, ctx):
         ctx.rgb(0.0, 0.0, 0.39).rectangle(-120, -120, 240, 240).fill()
@@ -969,7 +969,7 @@ class ConferenceBadge(app.App, WebServerMixin):
         ctx.font_size = 32
         ctx.rgb(*self.ice_fg_color).move_to(0, -80).text("ICE")
         if self._has_ice_configured():
-            self._draw_edge_arc(ctx, 35, 55, self._get_representative_battery_colour())
+            self._draw_edge_arc(ctx, 52.5, 67.5, self._get_representative_battery_colour())
 
         if self.ice_screen == 1:
             ctx.font_size = 20
