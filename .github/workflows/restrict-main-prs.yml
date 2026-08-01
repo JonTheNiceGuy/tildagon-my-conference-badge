@@ -1,0 +1,38 @@
+name: Restrict PRs to main
+
+# main only accepts merges from next (the staging branch); anything else
+# opened against main gets closed with a pointer to raise it against next
+# instead. Uses pull_request_target (not pull_request) so this also works
+# for PRs from forks, which get a read-only token under plain
+# pull_request - it never checks out or executes the PR's own code, only
+# calls the API based on trusted event metadata, which is what makes that
+# safe to do here.
+"on":
+  pull_request_target:
+    types: [opened, reopened]
+    branches:
+      - main
+
+jobs:
+  restrict:
+    if: github.head_ref != 'next'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment and close
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: "Thanks for the PR! `main` only accepts merges from `next` (the staging branch) - please raise this against `next` instead."
+            });
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              state: "closed"
+            });

@@ -1,0 +1,65 @@
+name: Tag and release on merge to main
+
+# The app store picks up new versions from a GitHub Release whose tag
+# matches metadata.version in tildagon.toml (see the top-level CLAUDE.md).
+# This automates that: every push to main reads the version straight out
+# of tildagon.toml and, if that version hasn't been released yet, tags and
+# publishes it - using the toml's own description as the release notes.
+# Idempotent: if the version didn't change since the last merge, it skips
+# creating a duplicate release.
+"on":
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read version and description from tildagon.toml
+        id: meta
+        run: |
+          python3 - <<'PYEOF' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open("tildagon.toml", "rb") as f:
+              data = tomllib.load(f)
+          version = data["metadata"]["version"].lstrip("v")
+          desc = data["metadata"]["description"]
+          print(f"tag=v{version}")
+          delim = "GHACTIONS_DESC_EOF"
+          print(f"desc<<{delim}")
+          print(desc)
+          print(delim)
+          PYEOF
+
+      - name: Skip if this version is already released
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Already released, skipping."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag + release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --title "${{ steps.meta.outputs.tag }}" \
+            --notes "${{ steps.meta.outputs.desc }}" \
+            --target "${{ github.sha }}"
