@@ -733,14 +733,15 @@ class ConferenceBadge(app.App, WebServerMixin):
             return colour_rgb(settings.get(field_key + "_batt_fg"), hfg)
         return self.fg_color
 
-    def _draw_edge_arc(self, ctx, start_percent, end_percent, colour, line_width=2, radius=119):
-        """Stroke an arc on the display's edge. 0% is the top of the
-        screen (12 o'clock) and percentages increase clockwise - e.g.
-        25%=3 o'clock, 50%=6 o'clock/bottom, 75%=9 o'clock - matching a
-        clock face read from the top.
+    def _draw_edge_arc(self, ctx, start_degrees, end_degrees, colour, line_width=2, radius=119):
+        """Stroke an arc on the display's edge. 0deg is the top of the
+        screen (12 o'clock, button A) and degrees increase clockwise
+        matching the button layout - 60deg=button B (NE), 120deg=button C
+        (SE), 180deg=button D (S), 240deg=button E (SW), 300deg=button F
+        (NW).
         """
-        start_angle = math.radians((270 + start_percent * 3.6) % 360)
-        end_angle = math.radians((270 + end_percent * 3.6) % 360)
+        start_angle = math.radians((270 + start_degrees) % 360)
+        end_angle = math.radians((270 + end_degrees) % 360)
         sweep = end_angle - start_angle
         if sweep < 0:
             sweep += 2 * math.pi
