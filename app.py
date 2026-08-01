@@ -64,6 +64,13 @@ class ConferenceBadge(app.App, WebServerMixin):
     # rather than on every render frame.
     BATTERY_REFRESH_MS = 30000
 
+    # Developer shortcut: tap A (UP) this many times, each within this
+    # window of the last, to pull the latest app code from GitHub and
+    # reboot - avoids needing REPL/serial access to redeploy while testing.
+    DEV_TAP_COUNT = 4
+    DEV_TAP_WINDOW_MS = 800
+    DEV_DEPLOY_URL = "https://raw.githubusercontent.com/JonTheNiceGuy/tildagon-my-conference-badge/relay-config/deploy_device.py"
+
     def __init__(self):
         super().__init__()
         self.button_states = Buttons(self)
@@ -107,6 +114,11 @@ class ConferenceBadge(app.App, WebServerMixin):
         # _get_battery_level and BATTERY_REFRESH_MS
         self.battery_level = None
         self.battery_checked_at = 0
+
+        # Developer redeploy-shortcut state - see _update_dev_shortcut
+        self._dev_tap_count = 0
+        self._dev_tap_last_ms = 0
+        self._dev_up_was_down = False
 
         # Image state
         self.app_path = get_app_path()
@@ -279,8 +291,42 @@ class ConferenceBadge(app.App, WebServerMixin):
         elif self.mode == self.MODE_WIFI_ERROR:
             self._update_wifi_error(delta)
 
+    def _update_dev_shortcut(self):
+        """Tap A (UP) DEV_TAP_COUNT times quickly: pull the latest app
+        code from GitHub and reboot. Edge-triggered (only counts the
+        press, not every frame it's held) via _dev_up_was_down.
+        """
+        up_down = self.button_states.get(BUTTON_TYPES["UP"])
+        if up_down and not self._dev_up_was_down:
+            now = time.ticks_ms()
+            if self._dev_tap_count > 0 and time.ticks_diff(now, self._dev_tap_last_ms) > self.DEV_TAP_WINDOW_MS:
+                self._dev_tap_count = 0
+            self._dev_tap_count += 1
+            self._dev_tap_last_ms = now
+            if self._dev_tap_count >= self.DEV_TAP_COUNT:
+                self._dev_tap_count = 0
+                self._trigger_dev_redeploy()
+        self._dev_up_was_down = up_down
+
+    def _trigger_dev_redeploy(self):
+        """Pull the latest app code from GitHub and reboot. Blocking (this
+        is a one-shot developer action, not something in a per-frame
+        loop) - the screen will appear to freeze for a few seconds while
+        it downloads, then the badge resets.
+        """
+        print("Dev shortcut: redeploying from " + self.DEV_DEPLOY_URL)
+        try:
+            import requests
+            exec(requests.get(self.DEV_DEPLOY_URL).text)
+        except Exception as e:
+            print("Dev redeploy failed: " + str(e))
+            return
+        import machine
+        machine.reset()
+
     def _update_badge(self, delta):
         """Update badge display mode."""
+        self._update_dev_shortcut()
         self.page_timer += delta
         if self.ice_confirm_mode:
             self.ice_confirm_timer += delta
