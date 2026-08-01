@@ -338,7 +338,13 @@ class ConferenceBadge(app.App, WebServerMixin):
         print("Dev shortcut: redeploying from " + self.DEV_DEPLOY_URL)
         try:
             import requests
-            exec(requests.get(self.DEV_DEPLOY_URL).text)
+            # exec()'d from inside a method, its default globals/locals
+            # would be this method's own local scope, not a shared
+            # namespace - the fetched script's top-level "def rm_rf(): ..."
+            # then "rm_rf(...)" call couldn't find its own function
+            # ("rm_rf isn't defined"). An explicit namespace dict makes
+            # everything in the fetched script share one consistent scope.
+            exec(requests.get(self.DEV_DEPLOY_URL).text, {})
         except Exception as e:
             print("Dev redeploy failed: " + str(e))
             self._dev_redeploying = False
